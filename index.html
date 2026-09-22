@@ -707,7 +707,7 @@
 // =====================================================
 const SUPABASE_URL = 'https://ttmimlqclhjijhhgtrat.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0bWltbHFjbGhqaWpoaGd0cmF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwNzQ0MTYsImV4cCI6MjEwNTY1MDQxNn0.oxeTNFYRwWEB0lHWDMEgi89HlLckci4kki8tO62ZW5o';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // =====================================================
 // APP STATE
@@ -756,10 +756,10 @@ document.getElementById('authBtn').addEventListener('click', async ()=>{
   try {
     let res;
     if(authMode === 'login'){
-      res = await supabase.auth.signInWithPassword({ email, password });
+      res = await supabaseClient.auth.signInWithPassword({ email, password });
     } else {
       const fullName = document.getElementById('fullName').value.trim() || email.split('@')[0];
-      res = await supabase.auth.signUp({
+      res = await supabaseClient.auth.signUp({
         email, password,
         options: { data: { full_name: fullName } }
       });
@@ -784,13 +784,13 @@ document.getElementById('authBtn').addEventListener('click', async ()=>{
 });
 
 document.getElementById('logoutBtn').addEventListener('click', async ()=>{
-  await supabase.auth.signOut();
+  await supabaseClient.auth.signOut();
 });
 
 // =====================================================
 // AUTH STATE LISTENER
 // =====================================================
-supabase.auth.onAuthStateChange(async (event, session) => {
+supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if(session && session.user){
     currentUser = session.user;
     await loadCurrentProfile();
@@ -805,7 +805,7 @@ supabase.auth.onAuthStateChange(async (event, session) => {
 async function loadCurrentProfile(){
   // If profile doesn't exist yet (signups without trigger), try to fetch; give it a moment
   for(let i=0; i<3; i++){
-    const { data } = await supabase.from('profiles').select('*').eq('id', currentUser.id).single();
+    const { data } = await supabaseClient.from('profiles').select('*').eq('id', currentUser.id).single();
     if(data){ currentProfile = data; return; }
     await new Promise(r => setTimeout(r, 500));
   }
@@ -865,12 +865,12 @@ async function loadAllData(){
 }
 
 async function loadCategories(){
-  const { data } = await supabase.from('equipment_categories').select('*').order('name');
+  const { data } = await supabaseClient.from('equipment_categories').select('*').order('name');
   equipmentCategories = data || [];
 }
 
 async function loadInventory(){
-  let { data } = await supabase
+  let { data } = await supabaseClient
     .from('equipment')
     .select('*, category:equipment_categories(name)')
     .order('sku');
@@ -906,7 +906,7 @@ function mapEquipStatus(status, have, total){
 }
 
 async function loadCheckouts(){
-  let { data } = await supabase
+  let { data } = await supabaseClient
     .from('checkouts')
     .select('*, equipment:equipment(name, sku)')
     .order('checked_out_at', { ascending: false });
@@ -934,7 +934,7 @@ async function loadCheckouts(){
 
 async function loadMaintenance(){
   if(currentProfile?.role !== 'admin'){ maintenanceData = []; return; }
-  let { data } = await supabase
+  let { data } = await supabaseClient
     .from('maintenance')
     .select('*, equipment:equipment(name)')
     .order('scheduled_date');
@@ -952,7 +952,7 @@ async function loadMaintenance(){
 
 async function loadProcurement(){
   if(currentProfile?.role !== 'admin'){ purchaseOrders = []; return; }
-  let { data } = await supabase
+  let { data } = await supabaseClient
     .from('purchase_orders')
     .select('*')
     .order('order_date', { ascending: false });
@@ -1120,11 +1120,11 @@ async function markReturned(checkoutId, qty, ev){
   if(btn) btn.disabled = true; btn.textContent = 'RETURNING...';
 
   // 1. Get checkout row to find equipment_id
-  const { data: co } = await supabase.from('checkouts').select('equipment_id').eq('id', checkoutId).single();
+  const { data: co } = await supabaseClient.from('checkouts').select('equipment_id').eq('id', checkoutId).single();
   if(!co){ alert('Could not find checkout'); return; }
 
   // 2. Update checkout status
-  await supabase.from('checkouts').update({
+  await supabaseClient.from('checkouts').update({
     status: 'returned',
     returned_at: new Date().toISOString(),
     returned_by: currentProfile.id
@@ -1132,7 +1132,7 @@ async function markReturned(checkoutId, qty, ev){
 
   // 3. Increment equipment available_qty
   if(co.equipment_id){
-    await supabase.rpc('increment_equipment_qty', { equipment_uuid: co.equipment_id, qty_increment: qty });
+    await supabaseClient.rpc('increment_equipment_qty', { equipment_uuid: co.equipment_id, qty_increment: qty });
   }
 
   // 4. Reload data and rerender
@@ -1175,7 +1175,7 @@ function renderMaintenance(){
 async function markMaintenanceDone(maintId, idx, ev){
   const btn = ev?.target;
   if(btn) btn.disabled = true; btn.textContent = 'SAVING...';
-  await supabase.from('maintenance').update({
+  await supabaseClient.from('maintenance').update({
     status: 'completed',
     completed_at: new Date().toISOString()
   }).eq('id', maintId);
@@ -1213,7 +1213,7 @@ function renderProcurement(){
 
 // Initial bootstrap: check existing session
 (async function init(){
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await supabaseClient.auth.getSession();
   if(session && session.user){
     currentUser = session.user;
     await loadCurrentProfile();
