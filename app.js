@@ -948,7 +948,13 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
 
   if(requestError){
     console.error(requestError);
-    alert(requestError.message || 'Failed to submit the borrow request.');
+    const msg = requestError.message || 'Failed to submit the borrow request.';
+    const missingTable = /does not exist|relation .*borrow_requests|column .*organization_name/i.test(msg);
+    alert(
+      missingTable
+        ? 'Borrow request storage is not ready in Supabase yet. Please run the project SQL migration so the borrow_requests table and organization_name column exist before submitting requests.'
+        : msg
+    );
     return;
   }
 
