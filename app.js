@@ -296,6 +296,7 @@ async function loadBorrowRequests(){
       totalQty: item.equipment?.total_qty ?? 0
     }))
   }));
+  console.debug('loadBorrowRequests:', { isAdmin, count: borrowRequests.length, samples: borrowRequests.slice(0,3) });
 }
 
 async function loadMaintenance(){
@@ -475,6 +476,7 @@ function renderBorrowRequests(){
     ? borrowRequests.filter(r => r.status === 'pending')
     : borrowRequests;
 
+  console.debug('renderBorrowRequests:', { isAdmin, visible: visibleRequests.length, recent: visibleRequests.slice(0,3) });
   if(!visibleRequests.length){
     const emptyMessage = isAdmin
       ? 'No equipment reservations waiting for approval.'
@@ -528,6 +530,7 @@ function renderBorrowRequests(){
 
 async function approveBorrowRequest(requestId){
   const request = borrowRequests.find(r => r.id === requestId);
+  console.debug('approveBorrowRequest start', { requestId, found: !!request, request });
   if(!request) return;
 
   const itemResults = [];
