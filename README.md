@@ -1,0 +1,87 @@
+# GearTrack (Supabase + Static Frontend)
+
+GearTrack is a static HTML/CSS/JS app backed by Supabase (Postgres + Auth + RLS). The UI includes: Dashboard, Inventory, Checkouts, Maintenance, and Procurement.
+
+## What We Completed
+
+- Supabase database schema created and verified (9 public tables) via `supabase_s.sql`.
+- Frontend connected to Supabase:
+  - Auth: sign up, sign in, sign out, session restore, and profile fetch.
+  - Data loading: inventory, checkouts, maintenance, purchase orders.
+- Deployment fix:
+  - Renamed `geartrack.html` to `index.html` so Netlify serves the site at `/` (prevents 404).
+- Frontend alignment fixes to follow the final schema:
+  - Procurement status label for `shipped` is displayed correctly.
+  - Admin-only behaviors are consistent (maintenance/procurement).
+  - Button actions use safe click-event handling (avoids browser issues).
+  - Email input updated to be universal (`you@example.com`) and normalized to prevent “invalid format” from accidental spaces/casing.
+
+## Files
+
+- `index.html` — main frontend (currently includes HTML + CSS + JS in one file)
+- `supabase_s.sql` — final Supabase schema + seed data + RLS policies + RPC function
+- `GearTrack_Milestones_for_Trae_AI.md` — milestone plan
+
+## Supabase Setup
+
+1) In Supabase → SQL Editor, run `supabase_s.sql` to create:
+- `profiles`
+- `equipment_categories`
+- `equipment`
+- `borrow_requests`
+- `borrow_request_items`
+- `checkouts`
+- `maintenance`
+- `purchase_orders`
+- `activity_logs`
+
+2) Seed data should appear for:
+- equipment_categories (5)
+- equipment (12)
+- maintenance (5)
+- purchase_orders (2)
+
+## Creating Users & Admin Role
+
+Users live in Supabase Auth (`auth.users`) and profiles are linked by UUID.
+
+1) Create an account using the app (Sign up) or Supabase Dashboard:
+- Supabase → Authentication → Users → Add user
+
+2) Promote a user to admin:
+```sql
+
+
+## Running Locally
+
+Open `index.html` in a browser via a local static server (recommended):
+- VS Code “Live Server” extension, or any simple local server
+
+## Deployment (Recommended Workflow)
+
+- Push the project to GitHub
+- Connect Netlify to the GitHub repo (“New site from Git”)
+- Ensure Netlify publishes the directory that contains `index.html`
+
+## Testing Checklist (Milestones 3–4 + current features)
+
+- Auth
+  - Sign up creates a user in Supabase Authentication → Users
+  - `profiles` row auto-created (trigger)
+  - Sign in/out works, session restores on refresh
+- RLS / Role gating
+  - Regular user can read inventory but cannot read maintenance/procurement tables
+  - Admin can access maintenance/procurement
+- Inventory
+  - Loads equipment from Supabase and filters by category
+- Checkouts / Returns
+  - “Mark Returned” updates checkout status and increments equipment availability via RPC
+- Maintenance
+  - “Mark Complete” updates maintenance status to completed
+
+## Next Step (Planned for Tomorrow)
+
+Refactor `index.html` into separate modules for easier maintenance:
+- Move CSS to its own file (e.g., `styles.css`)
+- Move JS to its own file(s) (e.g., `app.js` / module-based split by feature)
+- Keep the same UI/behavior, but improve maintainability by separating concerns
