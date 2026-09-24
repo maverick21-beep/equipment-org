@@ -186,6 +186,17 @@
       </table>
     </div>
 
+    <div class="table-wrap" id="returnVerificationPanel" style="margin-bottom:24px; display:none;">
+      <table>
+        <thead>
+          <tr>
+            <th>Ref</th><th>Equipment</th><th>Borrower</th><th>Qty</th><th>Checked Out</th><th>Due Return</th><th>Requested</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="returnRequestsBody"></tbody>
+      </table>
+    </div>
+
     <div class="table-wrap">
       <table>
         <thead>
@@ -218,6 +229,8 @@
 
 </main>
 </div>
+
+<div id="appNotice" class="app-notice" role="status" aria-live="polite"></div>
 
 <div id="adminEditModal" class="modal hidden" aria-hidden="true">
   <div class="modal-backdrop" data-close="true"></div>
@@ -384,6 +397,116 @@
       <div class="modal-actions">
         <button type="button" class="btn btn-secondary" id="cancelFinishMaintenanceModal">Cancel</button>
         <button type="submit" class="btn btn-orange" id="finishMaintenanceSubmit" disabled>Finish Maintenance</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="returnModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close-return="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="returnTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Early Return Request</div>
+        <h3 id="returnTitle">Return Equipment</h3>
+      </div>
+      <button type="button" class="modal-close" id="closeReturnModal" aria-label="Close return modal">×</button>
+    </div>
+
+    <form id="returnForm">
+      <div class="form-grid">
+        <div class="form-field modal-field">
+          <label>Equipment</label>
+          <input id="returnEquipmentName" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Reference ID</label>
+          <input id="returnReference" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Checked Out Quantity</label>
+          <input id="returnCheckedOutQuantity" type="number" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label for="returnQuantity">Quantity to Return</label>
+          <input id="returnQuantity" name="returnQuantity" type="number" min="1" required>
+        </div>
+        <div class="form-field modal-field">
+          <label>Received By</label>
+          <input id="returnReceivedBy" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Checked Out</label>
+          <input id="returnCheckedOutAt" type="text" readonly>
+        </div>
+        <div class="form-field modal-field modal-span">
+          <label>Due Return</label>
+          <input id="returnDueDate" type="text" readonly>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="cancelReturnModal">Cancel</button>
+        <button type="submit" class="btn btn-orange">Request Return</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="adminReturnModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close-admin-return="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="adminReturnTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Return Verification</div>
+        <h3 id="adminReturnTitle">Review Return</h3>
+      </div>
+      <button type="button" class="modal-close" id="closeAdminReturnModal" aria-label="Close return review modal">×</button>
+    </div>
+
+    <form id="adminReturnForm">
+      <div class="form-grid">
+        <div class="form-field modal-field">
+          <label>Equipment</label>
+          <input id="adminReturnEquipmentName" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Reference ID</label>
+          <input id="adminReturnReference" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Borrower / Recipient</label>
+          <input id="adminReturnBorrower" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Quantity Requested</label>
+          <input id="adminReturnQuantity" type="number" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Original Checkout Quantity</label>
+          <input id="adminReturnCheckoutQuantity" type="number" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Checked Out</label>
+          <input id="adminReturnCheckedOutAt" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Due Return</label>
+          <input id="adminReturnDueDate" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Requested</label>
+          <input id="adminReturnRequestedAt" type="text" readonly>
+        </div>
+        <div class="form-field modal-field modal-span">
+          <label for="adminReturnReason">Rejection Reason (optional)</label>
+          <textarea id="adminReturnReason" rows="3"></textarea>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="rejectReturnButton">Reject Return</button>
+        <button type="submit" class="btn btn-green">Confirm Return</button>
       </div>
     </form>
   </div>

@@ -17,6 +17,7 @@ let checkouts = [];
 let maintenanceData = [];
 let purchaseOrders = [];
 let borrowRequests = [];
+let returnRequests = [];
 let checkoutCount = 1;
 let invFilter = 'ALL';
 let checkoutFilter = 'all';
@@ -24,6 +25,8 @@ let checkoutSearchTerm = '';
 let currentEditEquipmentId = null;
 let selectedBorrowEquipment = null;
 let currentFinishMaintenance = null;
+let currentReturnCheckout = null;
+let currentAdminReturnRequest = null;
 
 // =====================================================
 // AUTH FUNCTIONS
@@ -40,6 +43,30 @@ function showAuthError(msg){
 function clearAuthError(){
   const el = document.getElementById('authError');
   if(el) el.classList.remove('show');
+}
+
+let noticeTimer = null;
+
+function showNotice(message, type = 'info'){
+  const notice = document.getElementById('appNotice');
+  if(!notice) return;
+  clearTimeout(noticeTimer);
+  notice.textContent = message;
+  notice.className = `app-notice show ${type}`;
+  noticeTimer = setTimeout(() => {
+    notice.classList.remove('show');
+  }, 5000);
+}
+
+function setButtonProcessing(button, processingText){
+  if(!button) return () => {};
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = processingText;
+  return () => {
+    button.disabled = false;
+    button.textContent = originalText;
+  };
 }
 
 function resetAuthButton(){
@@ -176,6 +203,7 @@ async function loadAllData(){
     loadInventory(),
     loadCheckouts(),
     loadBorrowRequests(),
+    loadReturnRequests(),
     loadMaintenance(),
     loadProcurement()
   ]);
@@ -183,6 +211,7 @@ async function loadAllData(){
   renderDashCheckouts();
   renderInventory();
   renderBorrowRequests();
+  renderReturnRequests();
   renderCheckouts();
   renderMaintenance();
   renderProcurement();
@@ -239,7 +268,7 @@ function mapEquipStatus(status, have, total){
 async function loadCheckouts(){
   let { data } = await supabaseClient
     .from('checkouts')
-    .select('*, equipment:equipment(name, sku), request_item:borrow_request_items(request:borrow_requests(purpose, organization_name))')
+    .select('*, equipment:equipment(name, sku), request_item:borrow_request_items(request:borrow_requests(purpose, organization_name)), returnRequests:return_requests(id, status, quantity, requested_at, rejection_reason)')
     .order('checked_out_at', { ascending: false });
   data = data || [];
   const today = new Date();
@@ -247,6 +276,8 @@ async function loadCheckouts(){
   checkouts = data.map((c, idx) => {
     const requestItem = Array.isArray(c.request_item) ? c.request_item[0] : c.request_item;
     const request = Array.isArray(requestItem?.request) ? requestItem.request[0] : requestItem?.request;
+    const checkoutReturnRequests = Array.isArray(c.returnRequests) ? c.returnRequests : c.returnRequests ? [c.returnRequests] : [];
+    const returnRequest = checkoutReturnRequests.sort((a, b) => new Date(b.requested_at) - new Date(a.requested_at))[0];
     const due = new Date(c.due_date); due.setHours(0,0,0,0);
     const overdue = c.status === 'checked_out' && due < today;
     return {
@@ -261,10 +292,49 @@ async function loadCheckouts(){
       due: c.due_date,
       qty: c.qty,
       overdue,
-      returned: c.status === 'returned'
+      returned: c.status === 'returned',
+      returnRequestId: returnRequest?.id || null,
+      returnStatus: returnRequest?.status || null,
+      returnQuantity: returnRequest?.quantity || 0,
+      returnReason: returnRequest?.rejection_reason || ''
     };
   });
   checkoutCount = checkouts.length;
+}
+
+async function loadReturnRequests(){
+  if(currentProfile?.role !== 'admin'){
+    returnRequests = [];
+    return;
+  }
+
+  const { data, error } = await supabaseClient
+    .from('return_requests')
+    .select(`*, checkout:checkouts(id, equipment_id, user_id, user_name, qty, checked_out_at, due_date, status, equipment:equipment(name, sku)), profile:profiles!return_requests_user_id_fkey(full_name, email)`)
+    .eq('status', 'pending')
+    .order('requested_at', { ascending: false });
+
+  if(error){
+    console.error(error);
+    returnRequests = [];
+    return;
+  }
+
+  returnRequests = (data || []).map(request => ({
+    id: request.id,
+    checkoutId: request.checkout_id,
+    borrower: request.profile?.full_name || request.profile?.email || request.checkout?.user_name || 'Unknown user',
+    email: request.profile?.email || '',
+    equipmentName: request.checkout?.equipment?.name || 'Unknown item',
+    ref: request.checkout?.equipment?.sku || '—',
+    quantity: request.quantity,
+    checkoutQuantity: request.checkout?.qty || 0,
+    checkedOutAt: request.checkout?.checked_out_at || '',
+    dueDate: request.checkout?.due_date || '—',
+    requestedAt: request.requested_at,
+    status: request.status,
+    rejectionReason: request.rejection_reason || ''
+  }));
 }
 
 async function loadBorrowRequests(){
@@ -559,18 +629,74 @@ function renderBorrowRequests(){
       const requestId = btn.getAttribute('data-request-id');
       const action = btn.getAttribute('data-request-action');
       if(action === 'approve') {
-        await approveBorrowRequest(requestId);
+        await approveBorrowRequest(requestId, btn);
       } else {
-        await rejectBorrowRequest(requestId);
+        await rejectBorrowRequest(requestId, btn);
       }
     });
   });
 }
 
-async function approveBorrowRequest(requestId){
+function renderReturnRequests(){
+  const panel = document.getElementById('returnVerificationPanel');
+  const body = document.getElementById('returnRequestsBody');
+  if(!panel || !body) return;
+
+  if(currentProfile?.role !== 'admin' || !returnRequests.length){
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = '';
+  body.innerHTML = returnRequests.map(request => `
+    <tr>
+      <td class="mono">${request.ref}</td>
+      <td class="strong">${request.equipmentName}</td>
+      <td>${request.borrower}</td>
+      <td class="strong">${request.quantity}</td>
+      <td class="mono dim">${(request.checkedOutAt || '').slice(0,10)}</td>
+      <td class="mono dim">${request.dueDate}</td>
+      <td class="mono dim">${(request.requestedAt || '').slice(0,10)}</td>
+      <td><button type="button" class="btn btn-orange" data-return-review-id="${request.id}">Review Return</button></td>
+    </tr>`).join('');
+
+  body.querySelectorAll('[data-return-review-id]').forEach(button => {
+    button.addEventListener('click', () => openAdminReturnModal(button.dataset.returnReviewId));
+  });
+}
+
+async function approveBorrowRequest(requestId, button){
   const request = borrowRequests.find(r => r.id === requestId);
   console.debug('approveBorrowRequest start', { requestId, found: !!request, request });
   if(!request) return;
+  const restoreButton = setButtonProcessing(button, 'APPROVING...');
+
+  for(const item of request.items){
+    const { data: equipment, error: equipmentError } = await supabaseClient
+      .from('equipment')
+      .select('status, available_qty')
+      .eq('id', item.equipmentId)
+      .single();
+
+    if(equipmentError || !equipment){
+      console.error(equipmentError);
+      restoreButton();
+      showNotice('Approval failed. The equipment could not be verified.', 'error');
+      return;
+    }
+
+    if(equipment.status === 'maintenance'){
+      restoreButton();
+      showNotice('Approval failed. This equipment is currently under maintenance.', 'error');
+      return;
+    }
+
+    if(equipment.status === 'deactivated'){
+      restoreButton();
+      showNotice('Approval failed. This equipment is no longer available.', 'error');
+      return;
+    }
+  }
 
   const { data: requestProfile } = await supabaseClient
     .from('profiles')
@@ -597,7 +723,8 @@ async function approveBorrowRequest(requestId){
 
         if(checkoutError){
           console.error(checkoutError);
-          alert('Failed to create checkout record.');
+          restoreButton();
+          showNotice('Approval failed. The checkout record was not created.', 'error');
           return;
         }
       }
@@ -609,16 +736,19 @@ async function approveBorrowRequest(requestId){
 
   if(updateRequestError){
     console.error(updateRequestError);
-    alert('Approval saved, but the reservation status could not be updated.');
+    restoreButton();
+    showNotice('Approval failed. The reservation status was not updated.', 'error');
     return;
   }
 
   await loadAllData();
+  showNotice('Borrow request approved successfully.', 'success');
 }
 
-async function rejectBorrowRequest(requestId){
+async function rejectBorrowRequest(requestId, button){
   const request = borrowRequests.find(r => r.id === requestId);
   if(!request) return;
+  const restoreButton = setButtonProcessing(button, 'REJECTING...');
 
   const { error } = await supabaseClient
     .from('borrow_requests')
@@ -627,19 +757,27 @@ async function rejectBorrowRequest(requestId){
 
   if(error){
     console.error(error);
-    alert('Failed to reject reservation.');
+    restoreButton();
+    showNotice('Rejection failed. The reservation was not changed.', 'error');
     return;
   }
 
   // Restore the reserved stock
   for (const item of request.items) {
-    await supabaseClient.rpc('increment_equipment_qty', { 
+    const { error: restoreError } = await supabaseClient.rpc('increment_equipment_qty', { 
       equipment_uuid: item.equipmentId, 
       qty_increment: item.qty 
     });
+    if(restoreError){
+      console.error(restoreError);
+      restoreButton();
+      showNotice('The request was rejected, but stock restoration failed.', 'error');
+      return;
+    }
   }
 
   await loadAllData();
+  showNotice('Borrow request rejected successfully.', 'success');
 }
 
 function getFilteredCheckouts(){
@@ -690,11 +828,16 @@ function renderCheckouts(){
       <td class="strong">${c.qty}</td>
       <td>${c.returned ? '<span class="pill returned">✓ Returned</span>' :
         (isAdmin ? `<button class="btn btn-orange" data-id="${c.id}" data-qty="${c.qty}">Mark Returned</button>` :
-        `<span class="pill checkedout">Out</span>`)}</td>
+          (c.returnStatus === 'pending'
+            ? '<span class="pill maintenance">Return Pending</span>'
+            : `<button class="btn btn-orange" data-return-checkout-id="${c.id}">${c.returnStatus === 'rejected' ? 'Return Again' : 'Return'}</button>`))}</td>
     </tr>`).join('');
 
   document.querySelectorAll('#coBody button[data-id]').forEach(b=>{
     b.addEventListener('click', (ev)=>markReturned(b.dataset.id, Number(b.dataset.qty), ev));
+  });
+  document.querySelectorAll('#coBody button[data-return-checkout-id]').forEach(b=>{
+    b.addEventListener('click', () => openReturnModal(b.dataset.returnCheckoutId));
   });
 }
 
@@ -716,22 +859,41 @@ if(checkoutSearchInput){
 
 async function markReturned(checkoutId, qty, ev){
   const btn = ev?.target;
-  if(btn){ btn.disabled = true; btn.textContent = 'RETURNING...'; }
+  const restoreButton = setButtonProcessing(btn, 'RETURNING...');
 
-  const { data: co } = await supabaseClient.from('checkouts').select('equipment_id').eq('id', checkoutId).single();
-  if(!co){ alert('Could not find checkout'); return; }
+  const { data: co, error: checkoutLookupError } = await supabaseClient.from('checkouts').select('equipment_id').eq('id', checkoutId).single();
+  if(checkoutLookupError || !co){
+    console.error(checkoutLookupError);
+    restoreButton();
+    showNotice('Return failed. The checkout could not be found.', 'error');
+    return;
+  }
 
-  await supabaseClient.from('checkouts').update({
+  const { error: returnError } = await supabaseClient.from('checkouts').update({
     status: 'returned',
     returned_at: new Date().toISOString(),
     returned_by: currentProfile.id
   }).eq('id', checkoutId);
 
+  if(returnError){
+    console.error(returnError);
+    restoreButton();
+    showNotice('Return failed. No changes were saved.', 'error');
+    return;
+  }
+
   if(co.equipment_id){
-    await supabaseClient.rpc('increment_equipment_qty', { equipment_uuid: co.equipment_id, qty_increment: qty });
+    const { error: stockError } = await supabaseClient.rpc('increment_equipment_qty', { equipment_uuid: co.equipment_id, qty_increment: qty });
+    if(stockError){
+      console.error(stockError);
+      showNotice('The checkout was marked returned, but stock could not be restored.', 'error');
+      await loadAllData();
+      return;
+    }
   }
 
   await loadAllData();
+  showNotice('Equipment returned successfully.', 'success');
 }
 
 function renderMaintenance(){
@@ -780,12 +942,21 @@ function renderMaintenance(){
 
 async function markMaintenanceDone(maintId, idx, ev){
   const btn = ev?.target;
-  if(btn){ btn.disabled = true; btn.textContent = 'SAVING...'; }
-  await supabaseClient.from('maintenance').update({
+  const restoreButton = setButtonProcessing(btn, 'SAVING...');
+  const { error } = await supabaseClient.from('maintenance').update({
     status: 'completed',
     completed_at: new Date().toISOString()
   }).eq('id', maintId);
+
+  if(error){
+    console.error(error);
+    restoreButton();
+    showNotice('Maintenance update failed. No changes were saved.', 'error');
+    return;
+  }
+
   await loadAllData();
+  showNotice('Maintenance marked complete successfully.', 'success');
 }
 
 function renderProcurement(){
@@ -877,6 +1048,14 @@ document.addEventListener('click', e => {
   if(e.target.matches('[data-close-maintenance="true"]') || e.target.id === 'closeFinishMaintenanceModal' || e.target.id === 'cancelFinishMaintenanceModal'){
     closeFinishMaintenanceModal();
   }
+
+  if(e.target.matches('[data-close-return="true"]') || e.target.id === 'closeReturnModal' || e.target.id === 'cancelReturnModal'){
+    closeReturnModal();
+  }
+
+  if(e.target.matches('[data-close-admin-return="true"]') || e.target.id === 'closeAdminReturnModal'){
+    closeAdminReturnModal();
+  }
 });
 
 function openBorrowModal(equipmentId){
@@ -884,9 +1063,9 @@ function openBorrowModal(equipmentId){
   if(!item) return;
 
   if(item.rawStatus === 'deactivated' || item.have <= 0){
-    alert(item.rawStatus === 'maintenance' && item.have <= 0
+    showNotice(item.rawStatus === 'maintenance' && item.have <= 0
       ? 'This equipment is currently under maintenance and cannot be borrowed.'
-      : 'This equipment is not currently available for borrowing.');
+      : 'This equipment is not currently available for borrowing.', 'warning');
     return;
   }
 
@@ -923,6 +1102,143 @@ function closeBorrowModal(){
   selectedBorrowEquipment = null;
   document.getElementById('borrowForm')?.reset();
 }
+
+function openReturnModal(checkoutId){
+  const checkout = checkouts.find(item => item.id === checkoutId);
+  if(!checkout || checkout.returned || checkout.returnStatus === 'pending') return;
+
+  currentReturnCheckout = checkout;
+  document.getElementById('returnEquipmentName').value = checkout.name;
+  document.getElementById('returnReference').value = checkout.ref;
+  document.getElementById('returnCheckedOutQuantity').value = checkout.qty;
+  document.getElementById('returnQuantity').value = checkout.qty;
+  document.getElementById('returnQuantity').max = checkout.qty;
+  document.getElementById('returnReceivedBy').value = checkout.athlete;
+  document.getElementById('returnCheckedOutAt').value = checkout.out;
+  document.getElementById('returnDueDate').value = checkout.due;
+
+  const modal = document.getElementById('returnModal');
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeReturnModal(){
+  const modal = document.getElementById('returnModal');
+  if(modal){
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  currentReturnCheckout = null;
+  document.getElementById('returnForm')?.reset();
+  const submit = document.querySelector('#returnForm button[type="submit"]');
+  if(submit){ submit.disabled = false; submit.textContent = 'Request Return'; }
+}
+
+document.getElementById('returnForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if(!currentReturnCheckout) return;
+
+  const quantity = Number(document.getElementById('returnQuantity').value);
+  if(!Number.isInteger(quantity) || quantity < 1 || quantity > currentReturnCheckout.qty){
+    showNotice(`Return quantity must be between 1 and ${currentReturnCheckout.qty}.`, 'error');
+    return;
+  }
+
+  const submit = event.currentTarget.querySelector('button[type="submit"]');
+  const restoreButton = setButtonProcessing(submit, 'PROCESSING...');
+  const { error } = await supabaseClient.rpc('request_equipment_return', {
+    checkout_uuid: currentReturnCheckout.id,
+    quantity_requested: quantity
+  });
+
+  if(error){
+    console.error(error);
+    restoreButton();
+    showNotice(/pending/i.test(error.message || '')
+      ? 'A return request is already pending for this checkout.'
+      : 'Return request could not be submitted. Please try again.', 'error');
+    return;
+  }
+
+  closeReturnModal();
+  await loadAllData();
+  showNotice('Return request submitted successfully. Please wait for admin verification.', 'success');
+});
+
+function openAdminReturnModal(returnRequestId){
+  const request = returnRequests.find(item => item.id === returnRequestId);
+  if(!request) return;
+
+  currentAdminReturnRequest = request;
+  document.getElementById('adminReturnEquipmentName').value = request.equipmentName;
+  document.getElementById('adminReturnReference').value = request.ref;
+  document.getElementById('adminReturnBorrower').value = request.borrower;
+  document.getElementById('adminReturnQuantity').value = request.quantity;
+  document.getElementById('adminReturnCheckoutQuantity').value = request.checkoutQuantity;
+  document.getElementById('adminReturnCheckedOutAt').value = request.checkedOutAt.slice(0,10);
+  document.getElementById('adminReturnDueDate').value = request.dueDate;
+  document.getElementById('adminReturnRequestedAt').value = request.requestedAt.slice(0,10);
+  document.getElementById('adminReturnReason').value = '';
+
+  const modal = document.getElementById('adminReturnModal');
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeAdminReturnModal(){
+  const modal = document.getElementById('adminReturnModal');
+  if(modal){
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  currentAdminReturnRequest = null;
+  document.getElementById('adminReturnForm')?.reset();
+  const confirmButton = document.querySelector('#adminReturnForm button[type="submit"]');
+  const rejectButton = document.getElementById('rejectReturnButton');
+  if(confirmButton){ confirmButton.disabled = false; confirmButton.textContent = 'Confirm Return'; }
+  if(rejectButton){ rejectButton.disabled = false; rejectButton.textContent = 'Reject Return'; }
+}
+
+async function reviewReturn(decision, button){
+  if(!currentAdminReturnRequest) return;
+
+  const confirmButton = document.querySelector('#adminReturnForm button[type="submit"]');
+  const rejectButton = document.getElementById('rejectReturnButton');
+  const restoreButton = setButtonProcessing(button, decision === 'approved' ? 'PROCESSING...' : 'PROCESSING...');
+  const otherButton = button === confirmButton ? rejectButton : confirmButton;
+  if(otherButton) otherButton.disabled = true;
+
+  const { error } = await supabaseClient.rpc('review_equipment_return', {
+    return_request_uuid: currentAdminReturnRequest.id,
+    decision,
+    rejection_reason_value: document.getElementById('adminReturnReason').value.trim() || null
+  });
+
+  if(error){
+    console.error(error);
+    restoreButton();
+    if(otherButton) otherButton.disabled = false;
+    showNotice(decision === 'approved'
+      ? 'Return confirmation failed. No changes were made.'
+      : 'Return request could not be processed.', 'error');
+    return;
+  }
+
+  closeAdminReturnModal();
+  await loadAllData();
+  showNotice(decision === 'approved'
+    ? 'Return confirmed successfully. The equipment has been returned to inventory.'
+    : 'Return request rejected successfully.', 'success');
+}
+
+document.getElementById('adminReturnForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  await reviewReturn('approved', event.submitter);
+});
+
+document.getElementById('rejectReturnButton').addEventListener('click', async event => {
+  await reviewReturn('rejected', event.currentTarget);
+});
 
 function updateFinishMaintenanceValidation(){
   const readyInput = document.getElementById('finishMaintenanceReady');
@@ -973,6 +1289,8 @@ function closeFinishMaintenanceModal(){
   }
   currentFinishMaintenance = null;
   document.getElementById('finishMaintenanceForm')?.reset();
+  const submit = document.getElementById('finishMaintenanceSubmit');
+  if(submit){ submit.disabled = true; submit.textContent = 'Finish Maintenance'; }
 }
 
 document.getElementById('finishMaintenanceReady').addEventListener('input', updateFinishMaintenanceValidation);
@@ -998,15 +1316,15 @@ document.getElementById('finishMaintenanceForm').addEventListener('submit', asyn
     console.error(error);
     submit.disabled = false;
     submit.textContent = 'Finish Maintenance';
-    alert(error.message || 'Failed to finish maintenance.');
+    showNotice('Maintenance update failed. No changes were saved.', 'error');
     return;
   }
 
   closeFinishMaintenanceModal();
   await loadAllData();
-  alert(needs > 0
+  showNotice(needs > 0
     ? `Maintenance updated. ${ready} items are now available and ${needs} items remain under maintenance.`
-    : `Maintenance completed successfully. All ${ready} items are now available.`);
+    : `Maintenance completed successfully. All ${ready} items are now available.`, 'success');
 });
 
 document.getElementById('borrowForm').addEventListener('submit', async (event) => {
@@ -1019,26 +1337,29 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
   const endDate = form.borrowEndDate.value;
   const purpose = form.borrowPurpose.value.trim();
   const organizationName = form.borrowOrganization.value.trim();
+  const submit = form.querySelector('button[type="submit"]');
 
   if(!qty || qty < 1){
-    alert('Please enter a valid quantity.');
+    showNotice('Please enter a valid quantity.', 'error');
     return;
   }
 
   if(qty > selectedBorrowEquipment.have){
-    alert(`Only ${selectedBorrowEquipment.have} item(s) are available for ${selectedBorrowEquipment.name}.`);
+    showNotice(`Only ${selectedBorrowEquipment.have} item(s) are available for ${selectedBorrowEquipment.name}.`, 'error');
     return;
   }
 
   if(!purpose || !organizationName){
-    alert('Please complete the purpose and organization details.');
+    showNotice('Please complete the purpose and organization details.', 'error');
     return;
   }
 
   if(endDate < startDate){
-    alert('End date must be after the start date.');
+    showNotice('End date must be after the start date.', 'error');
     return;
   }
+
+  const restoreSubmit = setButtonProcessing(submit, 'SUBMITTING...');
 
   const { error: reserveError } = await supabaseClient.rpc('reserve_equipment_qty', {
     equipment_uuid: selectedBorrowEquipment.id,
@@ -1047,7 +1368,13 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
 
   if(reserveError){
     console.error('Reserve stock failed:', reserveError);
-    alert(reserveError.message || 'Not enough stock to reserve this item right now.');
+    restoreSubmit();
+    const message = /maintenance/i.test(reserveError.message || '')
+      ? 'Checkout failed. This equipment is currently under maintenance.'
+      : /insufficient stock/i.test(reserveError.message || '')
+        ? 'Checkout failed. The requested quantity is no longer available.'
+        : 'Checkout failed. The equipment may no longer be available.';
+    showNotice(message, 'error');
     return;
   }
 
@@ -1071,10 +1398,12 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
 
     const msg = requestError.message || 'Failed to submit the borrow request.';
     const missingTable = /does not exist|relation .*borrow_requests|column .*organization_name/i.test(msg);
-    alert(
+    restoreSubmit();
+    showNotice(
       missingTable
         ? 'Borrow request storage is not ready in Supabase yet. Please run the project SQL migration so the borrow_requests table and organization_name column exist before submitting requests.'
-        : msg
+        : 'Request submission failed. No changes were saved.',
+      'error'
     );
     return;
   }
@@ -1097,12 +1426,14 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
 
     await supabaseClient.from('borrow_requests').delete().eq('id', requestData.id);
 
-    alert(itemError.message || 'Failed to add equipment details to the borrow request.');
+    restoreSubmit();
+    showNotice('Request submission failed. No changes were saved.', 'error');
     return;
   }
 
   closeBorrowModal();
   await loadAllData();
+  showNotice('Request submitted successfully.', 'success');
 });
 
 document.getElementById('adminEditForm').addEventListener('submit', async (event) => {
@@ -1113,18 +1444,21 @@ document.getElementById('adminEditForm').addEventListener('submit', async (event
   const item = inventory.find(i => i.id === currentEditEquipmentId);
   const availableQty = Number(form.availableStock.value);
   const totalQty = Number(form.totalStock.value);
+  const submit = form.querySelector('button[type="submit"]');
 
   if(!item) return;
 
   if(totalQty < availableQty){
-    alert('Total stock cannot be less than available stock.');
+    showNotice('Total stock cannot be less than available stock.', 'error');
     return;
   }
 
   if(item.rawStatus === 'maintenance' && item.maintenanceQty > 0 && form.status.value !== 'maintenance'){
-    alert('Finish the maintenance inspection before changing this equipment status.');
+    showNotice('Finish the maintenance inspection before changing this equipment status.', 'warning');
     return;
   }
+
+  const restoreSubmit = setButtonProcessing(submit, 'SAVING...');
 
   const basePayload = {
     name: form.equipmentName.value.trim(),
@@ -1142,7 +1476,8 @@ document.getElementById('adminEditForm').addEventListener('submit', async (event
 
     if(prepareError){
       console.error(prepareError);
-      alert(prepareError.message || 'Failed to update equipment.');
+      restoreSubmit();
+      showNotice('Equipment update failed. No changes were saved.', 'error');
       return;
     }
 
@@ -1153,12 +1488,14 @@ document.getElementById('adminEditForm').addEventListener('submit', async (event
 
     if(maintenanceError){
       console.error(maintenanceError);
-      alert(maintenanceError.message || 'Failed to start maintenance.');
+      restoreSubmit();
+      showNotice('Maintenance update failed. No changes were saved.', 'error');
       return;
     }
 
     closeEquipmentModal();
     await loadAllData();
+    showNotice('Equipment status changed to Maintenance successfully.', 'success');
     return;
   }
 
@@ -1169,12 +1506,14 @@ document.getElementById('adminEditForm').addEventListener('submit', async (event
   const { error } = await supabaseClient.from('equipment').update(payload).eq('id', currentEditEquipmentId);
   if(error){
     console.error(error);
-    alert(error.message || 'Failed to update equipment.');
+    restoreSubmit();
+    showNotice('Equipment update failed. No changes were saved.', 'error');
     return;
   }
 
   closeEquipmentModal();
   await loadAllData();
+  showNotice('Equipment updated successfully.', 'success');
 });
 
 // =====================================================

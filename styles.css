@@ -642,6 +642,30 @@
     color: var(--text);
   }
 
+  .app-notice{
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 300;
+    max-width: min(420px, calc(100vw - 32px));
+    padding: 13px 16px;
+    border: 1px solid var(--panel-border);
+    border-left: 3px solid var(--orange);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: 0 14px 35px rgba(0,0,0,0.35);
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(10px);
+    transition: opacity .2s ease, transform .2s ease;
+  }
+  .app-notice.show{ opacity: 1; transform: none; }
+  .app-notice.success{ border-left-color: var(--green); }
+  .app-notice.error{ border-left-color: var(--red); }
+  .app-notice.warning{ border-left-color: var(--yellow); }
+
   @media (max-width: 880px){
     header.topbar{ padding: 12px 16px; gap:14px; }
     nav.tabs{ order:3; width:100%; justify-content:flex-start; overflow-x:auto; }

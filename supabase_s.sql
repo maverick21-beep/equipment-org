@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS equipment (
   name TEXT NOT NULL,
   category_id UUID REFERENCES equipment_categories(id) ON DELETE SET NULL,
   available_qty INTEGER NOT NULL CHECK (available_qty >= 0),
+  maintenance_qty INTEGER NOT NULL DEFAULT 0 CHECK (maintenance_qty >= 0),
   total_qty INTEGER NOT NULL CHECK (total_qty >= 0),
   condition TEXT NOT NULL CHECK (condition IN ('Excellent', 'Good', 'Fair', 'Poor')),
   location TEXT NOT NULL,
@@ -98,6 +99,24 @@ CREATE TABLE IF NOT EXISTS borrow_requests (
 
 ALTER TABLE borrow_requests ADD COLUMN IF NOT EXISTS organization_name TEXT;
 
+ALTER TABLE equipment ADD COLUMN IF NOT EXISTS maintenance_qty INTEGER NOT NULL DEFAULT 0;
+
+UPDATE equipment
+SET maintenance_qty = total_qty - available_qty
+WHERE status = 'maintenance' AND maintenance_qty = 0;
+
+DO $equipment_quantity_balance$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'equipment_quantity_balance'
+  ) THEN
+    ALTER TABLE equipment
+      ADD CONSTRAINT equipment_quantity_balance
+      CHECK (available_qty + maintenance_qty <= total_qty);
+  END IF;
+END;
+$equipment_quantity_balance$;
+
 -- =====================================================
 -- TABLE 5: borrow_request_items
 -- =====================================================
@@ -131,7 +150,26 @@ CREATE TABLE IF NOT EXISTS checkouts (
 );
 
 -- =====================================================
--- TABLE 7: maintenance
+-- TABLE 7: return_requests
+-- =====================================================
+CREATE TABLE IF NOT EXISTS return_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  checkout_id UUID NOT NULL REFERENCES checkouts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reviewed_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  rejection_reason TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS one_pending_return_per_checkout
+  ON return_requests (checkout_id)
+  WHERE status = 'pending';
+
+-- =====================================================
+-- TABLE 8: maintenance
 -- =====================================================
 CREATE TABLE IF NOT EXISTS maintenance (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -148,7 +186,7 @@ CREATE TABLE IF NOT EXISTS maintenance (
 );
 
 -- =====================================================
--- TABLE 8: purchase_orders
+-- TABLE 9: purchase_orders
 -- =====================================================
 CREATE TABLE IF NOT EXISTS purchase_orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -168,7 +206,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
 );
 
 -- =====================================================
--- TABLE 9: activity_logs
+-- TABLE 10: activity_logs
 -- =====================================================
 CREATE TABLE IF NOT EXISTS activity_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -259,9 +297,34 @@ ALTER TABLE equipment ENABLE ROW LEVEL SECURITY;
 ALTER TABLE borrow_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE borrow_request_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE checkouts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE return_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE maintenance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE purchase_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_logs ENABLE ROW LEVEL SECURITY;
+
+-- Policies are recreated below so this complete schema can be safely rerun.
+DROP POLICY IF EXISTS profiles_select ON profiles;
+DROP POLICY IF EXISTS profiles_update ON profiles;
+DROP POLICY IF EXISTS categories_select ON equipment_categories;
+DROP POLICY IF EXISTS categories_all ON equipment_categories;
+DROP POLICY IF EXISTS equipment_select ON equipment;
+DROP POLICY IF EXISTS equipment_all ON equipment;
+DROP POLICY IF EXISTS requests_select ON borrow_requests;
+DROP POLICY IF EXISTS requests_insert ON borrow_requests;
+DROP POLICY IF EXISTS requests_update ON borrow_requests;
+DROP POLICY IF EXISTS requests_delete ON borrow_requests;
+DROP POLICY IF EXISTS items_select ON borrow_request_items;
+DROP POLICY IF EXISTS items_insert ON borrow_request_items;
+DROP POLICY IF EXISTS items_all_admin ON borrow_request_items;
+DROP POLICY IF EXISTS checkouts_select ON checkouts;
+DROP POLICY IF EXISTS checkouts_all_admin ON checkouts;
+DROP POLICY IF EXISTS return_requests_select ON return_requests;
+DROP POLICY IF EXISTS return_requests_insert ON return_requests;
+DROP POLICY IF EXISTS return_requests_admin_update ON return_requests;
+DROP POLICY IF EXISTS maintenance_all ON maintenance;
+DROP POLICY IF EXISTS po_all ON purchase_orders;
+DROP POLICY IF EXISTS logs_select ON activity_logs;
+DROP POLICY IF EXISTS logs_insert ON activity_logs;
 
 -- Helper function: check if current user is admin
 CREATE OR REPLACE FUNCTION is_admin()
@@ -364,6 +427,27 @@ CREATE POLICY checkouts_all_admin ON checkouts FOR ALL
   WITH CHECK (is_admin());
 
 -- ===============================
+-- RLS: return_requests
+-- ===============================
+CREATE POLICY return_requests_select ON return_requests FOR SELECT
+  USING (user_id = auth.uid() OR is_admin());
+
+CREATE POLICY return_requests_insert ON return_requests FOR INSERT
+  WITH CHECK (
+    user_id = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM checkouts c
+      WHERE c.id = checkout_id
+        AND c.user_id = auth.uid()
+        AND c.status = 'checked_out'
+    )
+  );
+
+CREATE POLICY return_requests_admin_update ON return_requests FOR UPDATE
+  USING (is_admin())
+  WITH CHECK (is_admin());
+
+-- ===============================
 -- RLS: maintenance — admins only
 -- ===============================
 CREATE POLICY maintenance_all ON maintenance FOR ALL
@@ -393,6 +477,332 @@ CREATE POLICY logs_insert ON activity_logs FOR INSERT
 -- =====================================================
 -- POSTGRES RPC: increment_equipment_qty (used on return)
 -- =====================================================
+CREATE OR REPLACE FUNCTION reserve_equipment_qty(equipment_uuid UUID, qty_requested INTEGER)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $reserve_equipment_qty$
+DECLARE
+  item equipment%ROWTYPE;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF qty_requested IS NULL OR qty_requested <= 0 THEN
+    RAISE EXCEPTION 'Quantity must be greater than zero';
+  END IF;
+
+  SELECT * INTO item FROM equipment WHERE id = equipment_uuid FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Equipment not found';
+  END IF;
+
+  IF item.status = 'maintenance' AND item.available_qty = 0 THEN
+    RAISE EXCEPTION 'This equipment is currently under maintenance and cannot be borrowed';
+  END IF;
+
+  IF item.status = 'deactivated' THEN
+    RAISE EXCEPTION 'This equipment is not available for borrowing';
+  END IF;
+
+  IF item.available_qty < qty_requested THEN
+    RAISE EXCEPTION 'Insufficient stock';
+  END IF;
+
+  UPDATE equipment
+  SET available_qty = available_qty - qty_requested,
+      updated_at = NOW()
+  WHERE id = equipment_uuid;
+END;
+$reserve_equipment_qty$;
+
+GRANT EXECUTE ON FUNCTION reserve_equipment_qty(UUID, INTEGER) TO authenticated;
+
+CREATE OR REPLACE FUNCTION request_equipment_return(
+  checkout_uuid UUID,
+  quantity_requested INTEGER
+)
+RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $request_equipment_return$
+DECLARE
+  checkout_row checkouts%ROWTYPE;
+  return_id UUID;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF quantity_requested IS NULL OR quantity_requested <= 0 THEN
+    RAISE EXCEPTION 'Return quantity must be greater than zero';
+  END IF;
+
+  SELECT * INTO checkout_row
+  FROM checkouts
+  WHERE id = checkout_uuid
+  FOR UPDATE;
+
+  IF NOT FOUND OR checkout_row.user_id <> auth.uid() THEN
+    RAISE EXCEPTION 'Checkout not found';
+  END IF;
+
+  IF checkout_row.status <> 'checked_out' THEN
+    RAISE EXCEPTION 'This checkout is already returned';
+  END IF;
+
+  IF quantity_requested > checkout_row.qty THEN
+    RAISE EXCEPTION 'Return quantity exceeds the outstanding checkout quantity';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM return_requests
+    WHERE checkout_id = checkout_uuid AND status = 'pending'
+  ) THEN
+    RAISE EXCEPTION 'A return request is already pending for this checkout';
+  END IF;
+
+  INSERT INTO return_requests (checkout_id, user_id, quantity)
+  VALUES (checkout_uuid, auth.uid(), quantity_requested)
+  RETURNING id INTO return_id;
+
+  RETURN return_id;
+END;
+$request_equipment_return$;
+
+GRANT EXECUTE ON FUNCTION request_equipment_return(UUID, INTEGER) TO authenticated;
+
+CREATE OR REPLACE FUNCTION review_equipment_return(
+  return_request_uuid UUID,
+  decision TEXT,
+  rejection_reason_value TEXT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $review_equipment_return$
+DECLARE
+  request_row return_requests%ROWTYPE;
+  checkout_row checkouts%ROWTYPE;
+  equipment_row equipment%ROWTYPE;
+BEGIN
+  IF NOT is_admin() THEN
+    RAISE EXCEPTION 'Only administrators can review returns';
+  END IF;
+
+  IF decision NOT IN ('approved', 'rejected') THEN
+    RAISE EXCEPTION 'Invalid return decision';
+  END IF;
+
+  SELECT * INTO request_row
+  FROM return_requests
+  WHERE id = return_request_uuid
+  FOR UPDATE;
+
+  IF NOT FOUND OR request_row.status <> 'pending' THEN
+    RAISE EXCEPTION 'Return request is no longer pending';
+  END IF;
+
+  SELECT * INTO checkout_row
+  FROM checkouts
+  WHERE id = request_row.checkout_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR checkout_row.status <> 'checked_out' THEN
+    RAISE EXCEPTION 'Checkout is no longer active';
+  END IF;
+
+  IF request_row.quantity > checkout_row.qty THEN
+    RAISE EXCEPTION 'Return quantity exceeds the active checkout quantity';
+  END IF;
+
+  IF decision = 'rejected' THEN
+    UPDATE return_requests
+    SET status = 'rejected',
+        reviewed_by = auth.uid(),
+        reviewed_at = NOW(),
+        rejection_reason = NULLIF(TRIM(rejection_reason_value), '')
+    WHERE id = return_request_uuid;
+    RETURN;
+  END IF;
+
+  SELECT * INTO equipment_row
+  FROM equipment
+  WHERE id = checkout_row.equipment_id
+  FOR UPDATE;
+
+  IF equipment_row.status = 'maintenance' THEN
+    UPDATE equipment
+    SET maintenance_qty = maintenance_qty + request_row.quantity,
+        updated_at = NOW()
+    WHERE id = equipment_row.id;
+  ELSE
+    UPDATE equipment
+    SET available_qty = LEAST(total_qty - maintenance_qty, available_qty + request_row.quantity),
+        updated_at = NOW()
+    WHERE id = equipment_row.id;
+  END IF;
+
+  IF request_row.quantity = checkout_row.qty THEN
+    UPDATE checkouts
+    SET status = 'returned',
+        returned_at = NOW(),
+        returned_by = auth.uid()
+    WHERE id = checkout_row.id;
+  ELSE
+    UPDATE checkouts
+    SET qty = qty - request_row.quantity
+    WHERE id = checkout_row.id;
+  END IF;
+
+  UPDATE return_requests
+  SET status = 'approved',
+      reviewed_by = auth.uid(),
+      reviewed_at = NOW()
+  WHERE id = return_request_uuid;
+END;
+$review_equipment_return$;
+
+GRANT EXECUTE ON FUNCTION review_equipment_return(UUID, TEXT, TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION start_equipment_maintenance(
+  equipment_uuid UUID,
+  maintenance_reason TEXT DEFAULT NULL
+)
+RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $start_equipment_maintenance$
+DECLARE
+  item equipment%ROWTYPE;
+  maintenance_id UUID;
+BEGIN
+  IF NOT is_admin() THEN
+    RAISE EXCEPTION 'Only administrators can start maintenance';
+  END IF;
+
+  SELECT * INTO item FROM equipment WHERE id = equipment_uuid FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Equipment not found';
+  END IF;
+
+  IF item.status = 'maintenance' THEN
+    SELECT id INTO maintenance_id
+    FROM maintenance
+    WHERE equipment_id = equipment_uuid
+      AND status <> 'completed'
+    ORDER BY created_at DESC
+    LIMIT 1;
+
+    IF maintenance_id IS NOT NULL THEN
+      RETURN maintenance_id;
+    END IF;
+
+    INSERT INTO maintenance (
+      equipment_id, type, priority, scheduled_date, technician, status, notes, created_by
+    ) VALUES (
+      equipment_uuid,
+      'Repair',
+      'medium',
+      CURRENT_DATE,
+      'Unassigned',
+      'scheduled',
+      'Equipment was already marked as under maintenance.',
+      auth.uid()
+    )
+    RETURNING id INTO maintenance_id;
+
+    RETURN maintenance_id;
+  END IF;
+
+  UPDATE equipment
+  SET maintenance_qty = maintenance_qty + available_qty,
+      available_qty = 0,
+      status = 'maintenance',
+      updated_at = NOW()
+  WHERE id = equipment_uuid;
+
+  INSERT INTO maintenance (
+    equipment_id, type, priority, scheduled_date, technician, status, notes, created_by
+  ) VALUES (
+    equipment_uuid,
+    'Repair',
+    'medium',
+    CURRENT_DATE,
+    'Unassigned',
+    'scheduled',
+    NULLIF(TRIM(maintenance_reason), ''),
+    auth.uid()
+  )
+  RETURNING id INTO maintenance_id;
+
+  RETURN maintenance_id;
+END;
+$start_equipment_maintenance$;
+
+GRANT EXECUTE ON FUNCTION start_equipment_maintenance(UUID, TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION finish_equipment_maintenance(
+  maintenance_uuid UUID,
+  ready_quantity INTEGER,
+  needs_maintenance_quantity INTEGER
+)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $finish_equipment_maintenance$
+DECLARE
+  task maintenance%ROWTYPE;
+  item equipment%ROWTYPE;
+BEGIN
+  IF NOT is_admin() THEN
+    RAISE EXCEPTION 'Only administrators can finish maintenance';
+  END IF;
+
+  IF ready_quantity IS NULL OR needs_maintenance_quantity IS NULL
+     OR ready_quantity < 0 OR needs_maintenance_quantity < 0 THEN
+    RAISE EXCEPTION 'Maintenance quantities cannot be negative';
+  END IF;
+
+  SELECT * INTO task FROM maintenance WHERE id = maintenance_uuid FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Maintenance record not found';
+  END IF;
+
+  SELECT * INTO item FROM equipment WHERE id = task.equipment_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Equipment not found';
+  END IF;
+
+  IF ready_quantity + needs_maintenance_quantity <> item.maintenance_qty THEN
+    RAISE EXCEPTION 'Maintenance quantities must equal the current maintenance quantity';
+  END IF;
+
+  IF item.available_qty + ready_quantity + needs_maintenance_quantity > item.total_qty THEN
+    RAISE EXCEPTION 'Result exceeds the equipment total quantity';
+  END IF;
+
+  UPDATE equipment
+  SET available_qty = available_qty + ready_quantity,
+      maintenance_qty = needs_maintenance_quantity,
+      status = CASE WHEN needs_maintenance_quantity > 0 THEN 'maintenance' ELSE 'available' END,
+      updated_at = NOW()
+  WHERE id = item.id;
+
+  UPDATE maintenance
+  SET status = CASE WHEN needs_maintenance_quantity > 0 THEN 'in_progress' ELSE 'completed' END,
+      completed_at = CASE WHEN needs_maintenance_quantity > 0 THEN NULL ELSE NOW() END,
+      notes = CONCAT_WS(E'\n', NULLIF(notes, ''),
+        FORMAT('Inspection result: %s ready, %s still requiring maintenance.', ready_quantity, needs_maintenance_quantity))
+  WHERE id = maintenance_uuid;
+END;
+$finish_equipment_maintenance$;
+
+GRANT EXECUTE ON FUNCTION finish_equipment_maintenance(UUID, INTEGER, INTEGER) TO authenticated;
+
 CREATE OR REPLACE FUNCTION increment_equipment_qty(equipment_uuid UUID, qty_increment INTEGER)
 RETURNS VOID
 LANGUAGE plpgsql SECURITY DEFINER
@@ -400,9 +810,14 @@ AS $increment_equipment_qty$
 BEGIN
   UPDATE equipment
   SET
-    available_qty = LEAST(total_qty, available_qty + qty_increment),
+    available_qty = LEAST(total_qty - maintenance_qty, available_qty + qty_increment),
     updated_at = NOW()
-  WHERE id = equipment_uuid;
+  WHERE id = equipment_uuid
+    AND available_qty + qty_increment >= 0;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Insufficient stock' USING ERRCODE = 'P0001';
+  END IF;
 END;
 $increment_equipment_qty$;
 
