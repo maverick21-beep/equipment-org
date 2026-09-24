@@ -8,6 +8,7 @@ GearTrack is a static HTML/CSS/JS app backed by Supabase (Postgres + Auth + RLS)
 - Frontend connected to Supabase:
   - Auth: sign up, sign in, sign out, session restore, and profile fetch.
   - Data loading: inventory, checkouts, maintenance, purchase orders.
+  - Notifications: persistent per-user notifications with Supabase Realtime updates.
 - Deployment fix:
   - Renamed `geartrack.html` to `index.html` so Netlify serves the site at `/` (prevents 404).
 - Frontend alignment fixes to follow the final schema:
@@ -34,6 +35,7 @@ GearTrack is a static HTML/CSS/JS app backed by Supabase (Postgres + Auth + RLS)
 - `maintenance`
 - `purchase_orders`
 - `activity_logs`
+- `notifications`
 
 2) Seed data should appear for:
 - equipment_categories (5)
@@ -50,6 +52,17 @@ Users live in Supabase Auth (`auth.users`) and profiles are linked by UUID.
 
 2) Promote a user to admin:
 ```sql
+UPDATE profiles SET role = 'admin' WHERE email = 'admin@example.com';
+```
+
+## Notifications
+
+The notification table, RLS policies, database triggers, and Supabase Realtime publication are included in `supabase_s.sql`. Run the updated SQL file in the Supabase SQL Editor before testing notifications. The app then shows an unread badge and notification panel for:
+
+- New borrow and return requests for admins
+- Borrow, checkout, and return decisions for users
+- Inventory changes for users
+- Maintenance and procurement changes for other admins
 
 
 ## Running Locally

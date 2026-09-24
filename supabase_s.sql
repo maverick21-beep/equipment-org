@@ -219,6 +219,22 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 );
 
 -- =====================================================
+-- TABLE 11: notifications
+-- =====================================================
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  recipient_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  target_table TEXT,
+  target_id UUID,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- =====================================================
 -- SEED DATA: equipment_categories
 -- =====================================================
 INSERT INTO equipment_categories (name) VALUES
@@ -301,6 +317,7 @@ ALTER TABLE return_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE maintenance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE purchase_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
 -- Policies are recreated below so this complete schema can be safely rerun.
 DROP POLICY IF EXISTS profiles_select ON profiles;
@@ -325,6 +342,8 @@ DROP POLICY IF EXISTS maintenance_all ON maintenance;
 DROP POLICY IF EXISTS po_all ON purchase_orders;
 DROP POLICY IF EXISTS logs_select ON activity_logs;
 DROP POLICY IF EXISTS logs_insert ON activity_logs;
+DROP POLICY IF EXISTS notifications_select ON notifications;
+DROP POLICY IF EXISTS notifications_update ON notifications;
 
 -- Helper function: check if current user is admin
 CREATE OR REPLACE FUNCTION is_admin()
@@ -469,6 +488,16 @@ CREATE POLICY logs_select ON activity_logs FOR SELECT
 
 CREATE POLICY logs_insert ON activity_logs FOR INSERT
   WITH CHECK (user_id = auth.uid() OR is_admin());
+
+-- ===============================
+-- RLS: notifications — recipients can read and mark their own as read
+-- ===============================
+CREATE POLICY notifications_select ON notifications FOR SELECT
+  USING (recipient_id = auth.uid());
+
+CREATE POLICY notifications_update ON notifications FOR UPDATE
+  USING (recipient_id = auth.uid())
+  WITH CHECK (recipient_id = auth.uid());
 
 -- =====================================================
 -- PART 2
@@ -844,3 +873,299 @@ CREATE INDEX IF NOT EXISTS idx_borrow_request_items_request_id
 
 CREATE INDEX IF NOT EXISTS idx_borrow_request_items_equipment_id
   ON public.borrow_request_items (equipment_id);
+
+-- =====================================================
+-- NOTIFICATION FAN-OUT
+-- =====================================================
+CREATE OR REPLACE FUNCTION public.create_notification(
+  notification_recipient UUID,
+  notification_type TEXT,
+  notification_title TEXT,
+  notification_message TEXT,
+  notification_table TEXT DEFAULT NULL,
+  notification_target UUID DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $create_notification$
+BEGIN
+  IF notification_recipient IS NULL OR notification_recipient = auth.uid() THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO public.notifications (
+    recipient_id, actor_id, type, title, message, target_table, target_id
+  ) VALUES (
+    notification_recipient,
+    auth.uid(),
+    notification_type,
+    notification_title,
+    notification_message,
+    notification_table,
+    notification_target
+  );
+END;
+$create_notification$;
+
+CREATE OR REPLACE FUNCTION public.notify_admins(
+  notification_type TEXT,
+  notification_title TEXT,
+  notification_message TEXT,
+  notification_table TEXT DEFAULT NULL,
+  notification_target UUID DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $notify_admins$
+DECLARE
+  admin_profile RECORD;
+BEGIN
+  FOR admin_profile IN SELECT id FROM public.profiles WHERE role = 'admin' LOOP
+    PERFORM public.create_notification(
+      admin_profile.id,
+      notification_type,
+      notification_title,
+      notification_message,
+      notification_table,
+      notification_target
+    );
+  END LOOP;
+END;
+$notify_admins$;
+
+CREATE OR REPLACE FUNCTION public.notify_users(
+  notification_type TEXT,
+  notification_title TEXT,
+  notification_message TEXT,
+  notification_table TEXT DEFAULT NULL,
+  notification_target UUID DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $notify_users$
+DECLARE
+  user_profile RECORD;
+BEGIN
+  FOR user_profile IN SELECT id FROM public.profiles LOOP
+    PERFORM public.create_notification(
+      user_profile.id,
+      notification_type,
+      notification_title,
+      notification_message,
+      notification_table,
+      notification_target
+    );
+  END LOOP;
+END;
+$notify_users$;
+
+CREATE OR REPLACE FUNCTION public.notify_borrow_request_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $notify_borrow_request_change$
+DECLARE
+  requester_name TEXT;
+  equipment_name TEXT;
+BEGIN
+  SELECT COALESCE(full_name, email, 'A user') INTO requester_name
+  FROM public.profiles WHERE id = NEW.user_id;
+
+  SELECT COALESCE(e.name, 'equipment') INTO equipment_name
+  FROM public.borrow_request_items bri
+  LEFT JOIN public.equipment e ON e.id = bri.equipment_id
+  WHERE bri.request_id = NEW.id
+  LIMIT 1;
+
+  IF TG_OP = 'INSERT' THEN
+    PERFORM public.notify_admins(
+      'borrow_request_created',
+      'New borrow request',
+      requester_name || ' submitted a new equipment request' ||
+        CASE WHEN equipment_name IS NULL THEN '.' ELSE ' for ' || equipment_name || '.' END,
+      'borrow_requests', NEW.id
+    );
+  ELSIF OLD.status IS DISTINCT FROM NEW.status THEN
+    PERFORM public.create_notification(
+      NEW.user_id,
+      'borrow_request_' || NEW.status,
+      'Borrow request ' || INITCAP(NEW.status),
+      'Your request for ' || equipment_name || ' was ' || NEW.status || '.',
+      'borrow_requests', NEW.id
+    );
+  END IF;
+
+  RETURN NEW;
+END;
+$notify_borrow_request_change$;
+
+CREATE OR REPLACE FUNCTION public.notify_return_request_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $notify_return_request_change$
+DECLARE
+  borrower_name TEXT;
+  equipment_name TEXT;
+BEGIN
+  SELECT COALESCE(c.user_name, 'A user'), COALESCE(e.name, 'equipment')
+  INTO borrower_name, equipment_name
+  FROM public.checkouts c
+  LEFT JOIN public.equipment e ON e.id = c.equipment_id
+  WHERE c.id = NEW.checkout_id;
+
+  IF TG_OP = 'INSERT' THEN
+    PERFORM public.notify_admins(
+      'return_request_created',
+      'Return request submitted',
+      borrower_name || ' requested to return ' || equipment_name || '.',
+      'return_requests', NEW.id
+    );
+  ELSIF OLD.status IS DISTINCT FROM NEW.status THEN
+    PERFORM public.create_notification(
+      NEW.user_id,
+      'return_request_' || NEW.status,
+      'Return request ' || INITCAP(NEW.status),
+      'Your return request for ' || equipment_name || ' was ' || NEW.status || '.',
+      'return_requests', NEW.id
+    );
+  END IF;
+
+  RETURN NEW;
+END;
+$notify_return_request_change$;
+
+CREATE OR REPLACE FUNCTION public.notify_checkout_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $notify_checkout_change$
+DECLARE
+  equipment_name TEXT;
+BEGIN
+  IF OLD.status IS DISTINCT FROM NEW.status THEN
+    SELECT COALESCE(name, 'equipment') INTO equipment_name
+    FROM public.equipment WHERE id = NEW.equipment_id;
+
+    PERFORM public.create_notification(
+      NEW.user_id,
+      'checkout_' || NEW.status,
+      'Checkout ' || INITCAP(REPLACE(NEW.status, '_', ' ')),
+      'Your checkout for ' || equipment_name || ' is now ' || REPLACE(NEW.status, '_', ' ') || '.',
+      'checkouts', NEW.id
+    );
+  END IF;
+  RETURN NEW;
+END;
+$notify_checkout_change$;
+
+CREATE OR REPLACE FUNCTION public.notify_equipment_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $notify_equipment_change$
+BEGIN
+  IF OLD.name IS DISTINCT FROM NEW.name
+     OR OLD.category_id IS DISTINCT FROM NEW.category_id
+     OR OLD.available_qty IS DISTINCT FROM NEW.available_qty
+     OR OLD.maintenance_qty IS DISTINCT FROM NEW.maintenance_qty
+     OR OLD.total_qty IS DISTINCT FROM NEW.total_qty
+     OR OLD.condition IS DISTINCT FROM NEW.condition
+     OR OLD.location IS DISTINCT FROM NEW.location
+     OR OLD.status IS DISTINCT FROM NEW.status THEN
+    PERFORM public.notify_users(
+      'inventory_updated',
+      'Inventory updated',
+      NEW.name || ' was updated in inventory.',
+      'equipment', NEW.id
+    );
+  END IF;
+  RETURN NEW;
+END;
+$notify_equipment_change$;
+
+CREATE OR REPLACE FUNCTION public.notify_admin_table_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $notify_admin_table_change$
+DECLARE
+  item_name TEXT;
+  item_action TEXT;
+BEGIN
+  IF TG_TABLE_NAME = 'maintenance' THEN
+    item_name := COALESCE((SELECT name FROM public.equipment WHERE id = NEW.equipment_id), 'equipment');
+    item_action := CASE WHEN TG_OP = 'INSERT' THEN 'created' ELSE 'updated' END;
+    PERFORM public.notify_admins(
+      'maintenance_' || lower(item_action),
+      'Maintenance ' || INITCAP(item_action),
+      item_name || ' maintenance record was ' || item_action || '.',
+      'maintenance', NEW.id
+    );
+  ELSE
+    item_name := COALESCE(NEW.equipment_description, NEW.po_number, 'Purchase order');
+    item_action := CASE WHEN TG_OP = 'INSERT' THEN 'created' ELSE 'updated' END;
+    PERFORM public.notify_admins(
+      'procurement_' || lower(item_action),
+      'Procurement ' || INITCAP(item_action),
+      item_name || ' was ' || item_action || '.',
+      'purchase_orders', NEW.id
+    );
+  END IF;
+  RETURN NEW;
+END;
+$notify_admin_table_change$;
+
+DROP TRIGGER IF EXISTS notify_borrow_request_created ON public.borrow_requests;
+CREATE TRIGGER notify_borrow_request_created
+  AFTER INSERT OR UPDATE OF status ON public.borrow_requests
+  FOR EACH ROW EXECUTE FUNCTION public.notify_borrow_request_change();
+
+DROP TRIGGER IF EXISTS notify_return_request_created ON public.return_requests;
+CREATE TRIGGER notify_return_request_created
+  AFTER INSERT OR UPDATE OF status ON public.return_requests
+  FOR EACH ROW EXECUTE FUNCTION public.notify_return_request_change();
+
+DROP TRIGGER IF EXISTS notify_checkout_status_changed ON public.checkouts;
+CREATE TRIGGER notify_checkout_status_changed
+  AFTER UPDATE OF status ON public.checkouts
+  FOR EACH ROW EXECUTE FUNCTION public.notify_checkout_change();
+
+DROP TRIGGER IF EXISTS notify_equipment_updated ON public.equipment;
+CREATE TRIGGER notify_equipment_updated
+  AFTER UPDATE ON public.equipment
+  FOR EACH ROW EXECUTE FUNCTION public.notify_equipment_change();
+
+DROP TRIGGER IF EXISTS notify_maintenance_changed ON public.maintenance;
+CREATE TRIGGER notify_maintenance_changed
+  AFTER INSERT OR UPDATE ON public.maintenance
+  FOR EACH ROW EXECUTE FUNCTION public.notify_admin_table_change();
+
+DROP TRIGGER IF EXISTS notify_purchase_order_changed ON public.purchase_orders;
+CREATE TRIGGER notify_purchase_order_changed
+  AFTER INSERT OR UPDATE ON public.purchase_orders
+  FOR EACH ROW EXECUTE FUNCTION public.notify_admin_table_change();
+
+GRANT SELECT, UPDATE ON public.notifications TO authenticated;
+
+DO $enable_notifications_realtime$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'notifications'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
+  END IF;
+END;
+$enable_notifications_realtime$;

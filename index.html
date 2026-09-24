@@ -74,6 +74,19 @@
   </nav>
   <div class="topbar-right">
     <div class="overdue-pill" id="overduePill">0 OVERDUE</div>
+    <div class="notification-wrap">
+      <button type="button" class="notification-btn" id="notificationButton" aria-label="Notifications" aria-expanded="false">
+        <span aria-hidden="true">!</span>
+        <span class="notification-count" id="notificationCount" hidden>0</span>
+      </button>
+      <div class="notification-panel hidden" id="notificationPanel" aria-hidden="true">
+        <div class="notification-head">
+          <strong>Notifications</strong>
+          <button type="button" class="notification-read-all" id="markAllNotifications">Mark all read</button>
+        </div>
+        <div class="notification-list" id="notificationList"></div>
+      </div>
+    </div>
     <div class="avatar" id="userAvatar">U</div>
     <button class="logout-btn" id="logoutBtn">Logout</button>
   </div>

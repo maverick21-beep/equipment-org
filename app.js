@@ -27,6 +27,8 @@ let selectedBorrowEquipment = null;
 let currentFinishMaintenance = null;
 let currentReturnCheckout = null;
 let currentAdminReturnRequest = null;
+let notifications = [];
+let notificationChannel = null;
 
 // =====================================================
 // AUTH FUNCTIONS
@@ -57,6 +59,114 @@ function showNotice(message, type = 'info'){
     notice.classList.remove('show');
   }, 5000);
 }
+
+function formatNotificationTime(value){
+  const date = new Date(value);
+  if(Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], { dateStyle:'medium', timeStyle:'short' });
+}
+
+function renderNotifications(){
+  const list = document.getElementById('notificationList');
+  const count = document.getElementById('notificationCount');
+  if(!list || !count) return;
+
+  const unread = notifications.filter(item => !item.read_at).length;
+  count.textContent = unread > 99 ? '99+' : String(unread);
+  count.hidden = unread === 0;
+
+  if(!notifications.length){
+    list.innerHTML = '<div class="notification-empty">No notifications yet.</div>';
+    return;
+  }
+
+  list.innerHTML = notifications.map(item => `
+    <div class="notification-item ${item.read_at ? '' : 'unread'}" data-notification-id="${item.id}">
+      <div class="notification-title">${item.title}</div>
+      <div class="notification-message">${item.message}</div>
+      <div class="notification-time">${formatNotificationTime(item.created_at)}</div>
+    </div>`).join('');
+}
+
+async function loadNotifications(){
+  if(!currentUser) return;
+  const { data, error } = await supabaseClient
+    .from('notifications')
+    .select('*')
+    .eq('recipient_id', currentUser.id)
+    .order('created_at', { ascending:false })
+    .limit(50);
+  if(error){ console.error('Notifications could not be loaded:', error); return; }
+  notifications = data || [];
+  renderNotifications();
+}
+
+function stopNotificationUpdates(){
+  if(notificationChannel){
+    supabaseClient.removeChannel(notificationChannel);
+    notificationChannel = null;
+  }
+  notifications = [];
+  renderNotifications();
+}
+
+async function startNotificationUpdates(){
+  await loadNotifications();
+  if(notificationChannel || !currentUser) return;
+  notificationChannel = supabaseClient
+    .channel(`notifications:${currentUser.id}`)
+    .on('postgres_changes', {
+      event:'INSERT', schema:'public', table:'notifications',
+      filter:`recipient_id=eq.${currentUser.id}`
+    }, payload => {
+      notifications = [payload.new, ...notifications.filter(item => item.id !== payload.new.id)].slice(0, 50);
+      renderNotifications();
+      showNotice(payload.new.title, 'info');
+    })
+    .subscribe(status => {
+      if(status === 'CHANNEL_ERROR') console.error('Notification realtime subscription failed.');
+    });
+}
+
+document.getElementById('notificationButton')?.addEventListener('click', event => {
+  event.stopPropagation();
+  const panel = document.getElementById('notificationPanel');
+  const button = event.currentTarget;
+  const open = panel?.classList.toggle('hidden') === false;
+  button.setAttribute('aria-expanded', String(open));
+  panel?.setAttribute('aria-hidden', String(!open));
+});
+
+document.getElementById('notificationList')?.addEventListener('click', async event => {
+  const item = event.target.closest('[data-notification-id]');
+  if(!item) return;
+  const notification = notifications.find(entry => entry.id === item.dataset.notificationId);
+  if(!notification || notification.read_at) return;
+  const { error } = await supabaseClient.from('notifications').update({ read_at:new Date().toISOString() }).eq('id', notification.id);
+  if(error){ console.error(error); return; }
+  notification.read_at = new Date().toISOString();
+  renderNotifications();
+});
+
+document.getElementById('markAllNotifications')?.addEventListener('click', async () => {
+  const unreadIds = notifications.filter(item => !item.read_at).map(item => item.id);
+  if(!unreadIds.length || !currentUser) return;
+  const { error } = await supabaseClient.from('notifications').update({ read_at:new Date().toISOString() }).in('id', unreadIds);
+  if(error){ console.error(error); return; }
+  notifications.forEach(item => { if(!item.read_at) item.read_at = new Date().toISOString(); });
+  renderNotifications();
+});
+
+document.addEventListener('click', event => {
+  if(event.target.closest('.notification-wrap')) return;
+  const panel = document.getElementById('notificationPanel');
+  const button = document.getElementById('notificationButton');
+  if(panel && !panel.classList.contains('hidden')){
+    panel.classList.add('hidden');
+    panel.setAttribute('aria-hidden', 'true');
+    button?.setAttribute('aria-expanded', 'false');
+  }
+});
 
 function setButtonProcessing(button, processingText){
   if(!button) return () => {};
@@ -140,7 +250,9 @@ supabaseClient.auth.onAuthStateChange(async (event, session) => {
     await loadCurrentProfile();
     showAppShell();
     await loadAllData();
+    await startNotificationUpdates();
   } else {
+    stopNotificationUpdates();
     currentUser = null; currentProfile = null;
     showAuthScreen();
   }
@@ -1526,6 +1638,7 @@ document.getElementById('adminEditForm').addEventListener('submit', async (event
     await loadCurrentProfile();
     showAppShell();
     await loadAllData();
+    await startNotificationUpdates();
   } else {
     showAuthScreen();
   }
