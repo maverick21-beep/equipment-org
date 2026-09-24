@@ -758,7 +758,7 @@
   }
 
   /* ---------- Public landing page ---------- */
-  .landing-page{
+  .landing-page,.app-page{
     position:relative;
     background-color:#11151f;
     background:
@@ -775,7 +775,7 @@
   .landing-shell{ min-height:100vh; }
   @media (max-width:900px){
     /* background-attachment:fixed is unreliable on mobile browsers; fall back to scroll */
-    .landing-page{ background-attachment:scroll, scroll; }
+    .landing-page,.app-page{ background-attachment:scroll, scroll; }
   }
   .landing-nav{
     position:sticky; top:0; z-index:100; display:flex; align-items:center; gap:28px;
