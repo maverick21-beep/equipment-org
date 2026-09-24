@@ -899,6 +899,17 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
     return;
   }
 
+  const { error: reserveError } = await supabaseClient.rpc('increment_equipment_qty', {
+    equipment_uuid: selectedBorrowEquipment.id,
+    qty_increment: -qty
+  });
+
+  if(reserveError){
+    console.error('Reserve stock failed:', reserveError);
+    alert(reserveError.message || 'Not enough stock to reserve this item right now.');
+    return;
+  }
+
   const { data: requestData, error: requestError } = await supabaseClient
     .from('borrow_requests')
     .insert({
@@ -912,6 +923,11 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
 
   if(requestError){
     console.error(requestError);
+    await supabaseClient.rpc('increment_equipment_qty', {
+      equipment_uuid: selectedBorrowEquipment.id,
+      qty_increment: qty
+    });
+
     const msg = requestError.message || 'Failed to submit the borrow request.';
     const missingTable = /does not exist|relation .*borrow_requests|column .*organization_name/i.test(msg);
     alert(
@@ -931,23 +947,22 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
   });
 
   if(itemError){
-        console.error(itemError);
-        alert(itemError.message || 'Failed to add equipment details to the borrow request.');
-        return;
-      }
+    console.error(itemError);
 
-      // Deduct stock immediately upon request to reserve it
-      const { error: stockError } = await supabaseClient.rpc('increment_equipment_qty', { 
-        equipment_uuid: selectedBorrowEquipment.id, 
-        qty_increment: -qty 
-      });
-      if(stockError){
-        console.error("Failed to deduct stock:", stockError);
-      }
-
-      closeBorrowModal();
-      await loadAllData();
+    await supabaseClient.rpc('increment_equipment_qty', {
+      equipment_uuid: selectedBorrowEquipment.id,
+      qty_increment: qty
     });
+
+    await supabaseClient.from('borrow_requests').delete().eq('id', requestData.id);
+
+    alert(itemError.message || 'Failed to add equipment details to the borrow request.');
+    return;
+  }
+
+  closeBorrowModal();
+  await loadAllData();
+});
 
 document.getElementById('adminEditForm').addEventListener('submit', async (event) => {
   event.preventDefault();
