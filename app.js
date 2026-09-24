@@ -694,62 +694,62 @@ function attachInventoryFilters(){
 }
 
 function renderBorrowRequests(){
-  const body = document.getElementById('borrowRequestsBody');
-  if(!body) return;
+  const pendingRejectedBody = document.getElementById('pendingRejectedBody');
+  const pendingRejectedSection = document.getElementById('pendingRejectedSection');
+  if(!pendingRejectedBody || !pendingRejectedSection) return;
 
   const isAdmin = currentProfile?.role === 'admin';
-  const visibleRequests = isAdmin
-    ? borrowRequests.filter(r => r.status === 'pending')
-    : borrowRequests;
+  const searchValue = checkoutSearchTerm.trim().toLowerCase();
+  const matchesSearch = request => {
+    if(!searchValue) return true;
+    const itemText = request.items.map(item => item.equipmentName).join(' ');
+    const searchText = `${request.borrower} ${request.email} ${request.organizationName} ${request.purpose} ${itemText}`.toLowerCase();
+    return searchText.includes(searchValue);
+  };
+  const matchesFilter = request => {
+    if(checkoutFilter === 'approved' || checkoutFilter === 'active') return request.status === 'approved';
+    if(checkoutFilter === 'pending') return request.status === 'pending';
+    if(checkoutFilter === 'rejected') return request.status === 'rejected';
+    if(checkoutFilter === 'overdue' || checkoutFilter === 'returned') return false;
+    return true;
+  };
+  const visibleRequests = borrowRequests.filter(request => matchesFilter(request) && matchesSearch(request));
+  const pendingRejectedRequests = visibleRequests.filter(request => request.status === 'pending' || request.status === 'rejected');
 
-  console.debug('renderBorrowRequests:', { isAdmin, visible: visibleRequests.length, recent: visibleRequests.slice(0,3) });
-  if(!visibleRequests.length){
-    const emptyMessage = isAdmin
-      ? 'No equipment reservations waiting for approval.'
-      : 'You have no equipment requests yet. Choose Borrow on an item to submit one.';
-    body.innerHTML = `<tr><td colspan="9" class="dim">${emptyMessage}</td></tr>`;
-    return;
-  }
-
-  body.innerHTML = visibleRequests.map(req => {
+  const renderRequestRows = requests => requests.length ? requests.map(req => {
     const firstItem = req.items[0] || {};
     const itemText = req.items.map(item => `${item.equipmentName} (${item.qty})`).join(', ');
-    const statusClass = req.status === 'approved' ? 'available' : req.status === 'rejected' ? 'maintenance' : 'maintenance';
+    const requestStatusClass = req.status === 'approved' ? 'available' : req.status === 'rejected' ? 'maintenance' : 'maintenance';
+    const actions = isAdmin && req.status === 'pending' ? `
+      <div class="inventory-status-cell">
+        <button type="button" class="btn btn-green" data-request-action="approve" data-request-id="${req.id}">Approve</button>
+        <button type="button" class="btn btn-secondary" data-request-action="reject" data-request-id="${req.id}">Reject</button>
+      </div>` : '<span class="dim">—</span>';
 
     return `
       <tr>
-        <td>
-          <div class="strong">${req.borrower}</div>
-          <div class="mono dim">${req.email || req.organizationName}</div>
-        </td>
+        <td><div class="strong">${req.borrower}</div><div class="mono dim">${req.email || req.organizationName}</div></td>
         <td>${req.organizationName}</td>
         <td>${itemText}</td>
         <td>${req.items.reduce((sum, item) => sum + Number(item.qty || 0), 0)}</td>
         <td class="mono dim">${firstItem.borrowDate || '—'}</td>
         <td class="mono dim">${firstItem.dueDate || '—'}</td>
-        <td>
-          <div class="strong">${req.purpose}</div>
-        </td>
-        <td><span class="pill ${statusClass}">${req.status}</span></td>
-        <td>
-          ${isAdmin ? `
-            <div class="inventory-status-cell">
-              <button type="button" class="btn btn-green" data-request-action="approve" data-request-id="${req.id}">Approve</button>
-              <button type="button" class="btn btn-secondary" data-request-action="reject" data-request-id="${req.id}">Reject</button>
-            </div>` : '<span class="dim">—</span>'}
-        </td>
+        <td><div class="strong">${req.purpose}</div></td>
+        <td><span class="pill ${requestStatusClass}">${req.status}</span></td>
+        <td>${actions}</td>
       </tr>`;
-  }).join('');
+  }).join('') : '<tr><td colspan="9" class="dim">No matching requests found.</td></tr>';
+
+  const requestTablesVisible = ['all', 'pending', 'rejected'].includes(checkoutFilter);
+  pendingRejectedSection.style.display = requestTablesVisible ? '' : 'none';
+  pendingRejectedBody.innerHTML = renderRequestRows(pendingRejectedRequests);
 
   document.querySelectorAll('[data-request-action]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const requestId = btn.getAttribute('data-request-id');
       const action = btn.getAttribute('data-request-action');
-      if(action === 'approve') {
-        await approveBorrowRequest(requestId, btn);
-      } else {
-        await rejectBorrowRequest(requestId, btn);
-      }
+      if(action === 'approve') await approveBorrowRequest(requestId, btn);
+      else await rejectBorrowRequest(requestId, btn);
     });
   });
 }
@@ -759,13 +759,22 @@ function renderReturnRequests(){
   const body = document.getElementById('returnRequestsBody');
   if(!panel || !body) return;
 
-  if(currentProfile?.role !== 'admin' || !returnRequests.length){
+  const searchValue = checkoutSearchTerm.trim().toLowerCase();
+  const filteredRequests = returnRequests.filter(request => {
+    if(searchValue){
+      const searchText = `${request.borrower} ${request.email} ${request.equipmentName} ${request.ref}`.toLowerCase();
+      if(!searchText.includes(searchValue)) return false;
+    }
+    return checkoutFilter === 'all' || checkoutFilter === 'pending';
+  });
+
+  if(currentProfile?.role !== 'admin' || !filteredRequests.length){
     panel.style.display = 'none';
     return;
   }
 
   panel.style.display = '';
-  body.innerHTML = returnRequests.map(request => `
+  body.innerHTML = filteredRequests.map(request => `
     <tr>
       <td class="mono">${request.ref}</td>
       <td class="strong">${request.equipmentName}</td>
@@ -902,12 +911,16 @@ function getFilteredCheckouts(){
   return checkouts.filter(c => {
     let matchesFilter = true;
 
-    if(checkoutFilter === 'active') {
+    if(checkoutFilter === 'approved') {
+      matchesFilter = true;
+    } else if(checkoutFilter === 'active') {
       matchesFilter = !c.returned;
     } else if(checkoutFilter === 'overdue') {
       matchesFilter = !c.returned && c.overdue;
     } else if(checkoutFilter === 'returned') {
       matchesFilter = c.returned;
+    } else if(checkoutFilter === 'pending' || checkoutFilter === 'rejected') {
+      matchesFilter = false;
     }
 
     if(!searchValue) return matchesFilter;
@@ -929,6 +942,8 @@ function renderCheckouts(){
   if(alertText) alertText.textContent = `${overdueCount} checkout${overdueCount===1?'':'s'} past due date`;
 
   const body = document.getElementById('coBody');
+  const recordsSection = document.getElementById('checkoutRecordsSection');
+  if(recordsSection) recordsSection.style.display = ['pending', 'rejected'].includes(checkoutFilter) ? 'none' : '';
   if(!body) return;
   if(!filtered.length){ body.innerHTML = '<tr><td colspan="9" class="dim">No matching checkouts found.</td></tr>'; return; }
 
@@ -963,6 +978,8 @@ if(checkoutFilterSelect){
   checkoutFilterSelect.addEventListener('change', e => {
     checkoutFilter = e.target.value;
     renderCheckouts();
+    renderBorrowRequests();
+    renderReturnRequests();
   });
 }
 
@@ -971,6 +988,8 @@ if(checkoutSearchInput){
   checkoutSearchInput.addEventListener('input', e => {
     checkoutSearchTerm = e.target.value;
     renderCheckouts();
+    renderBorrowRequests();
+    renderReturnRequests();
   });
 }
 

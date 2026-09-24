@@ -17,14 +17,14 @@
   <rect width="1600" height="1000" fill="url(#glowSide)"/>
 
   <!-- running track -->
-  <g stroke="#f2650f" stroke-opacity="0.08" fill="none" stroke-width="3">
+  <g stroke="#f2650f" stroke-opacity="0.14" fill="none" stroke-width="3">
     <ellipse cx="800" cy="560" rx="680" ry="270"/>
     <ellipse cx="800" cy="560" rx="560" ry="200"/>
     <ellipse cx="800" cy="560" rx="440" ry="130"/>
   </g>
 
   <!-- basketball court diagram, upper left -->
-  <g stroke="#8b91a5" stroke-opacity="0.09" fill="none" stroke-width="2.5">
+  <g stroke="#8b91a5" stroke-opacity="0.13" fill="none" stroke-width="2.5">
     <rect x="80" y="90" width="360" height="230" rx="4"/>
     <circle cx="260" cy="205" r="58"/>
     <line x1="80" y1="205" x2="440" y2="205"/>
@@ -37,7 +37,7 @@
     stroke-linecap="round" stroke-linejoin="round"/>
 
   <!-- basketball, upper right, faint -->
-  <g stroke="#ffffff" stroke-opacity="0.05" fill="none" stroke-width="2.5">
+  <g stroke="#ffffff" stroke-opacity="0.10" fill="none" stroke-width="2.5">
     <circle cx="1360" cy="180" r="130"/>
     <path d="M1230 180 c70 26 140 26 260 0"/>
     <path d="M1220 240 c80 -26 160 -26 280 0"/>
@@ -45,7 +45,7 @@
   </g>
 
   <!-- dumbbell, lower right -->
-  <g stroke="#4f8cff" stroke-opacity="0.10" fill="none" stroke-width="4" stroke-linecap="round">
+  <g stroke="#4f8cff" stroke-opacity="0.14" fill="none" stroke-width="4" stroke-linecap="round">
     <line x1="1220" y1="880" x2="1430" y2="880"/>
     <rect x="1190" y="850" width="40" height="60" rx="8"/>
     <rect x="1420" y="850" width="40" height="60" rx="8"/>
@@ -54,7 +54,7 @@
   </g>
 
   <!-- stopwatch, mid right -->
-  <g stroke="#eab308" stroke-opacity="0.09" fill="none" stroke-width="2.5">
+  <g stroke="#eab308" stroke-opacity="0.13" fill="none" stroke-width="2.5">
     <circle cx="1470" cy="520" r="70"/>
     <line x1="1470" y1="450" x2="1470" y2="430"/>
     <line x1="1445" y1="410" x2="1460" y2="425"/>
@@ -63,7 +63,7 @@
   </g>
 
   <!-- soccer ball, lower left -->
-  <g stroke="#ffffff" stroke-opacity="0.05" fill="none" stroke-width="2.2">
+  <g stroke="#ffffff" stroke-opacity="0.10" fill="none" stroke-width="2.2">
     <circle cx="180" cy="860" r="90"/>
     <path d="M140 830 l40 -18 40 18 8 44 -44 26 -44 -26 8 -44Z"/>
     <line x1="180" y1="770" x2="180" y2="800"/>

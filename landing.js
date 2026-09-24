@@ -1,5 +1,5 @@
 const SUPABASE_URL = 'https://ttmimlqclhjijhhgtrat.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmF0ZSIsInJlZiI6InR0bWltbHFjbGhqaWpoaGd0cmF0IiwiaWF0IjoxNzkwMDc0NDE2LCJleHAiOjIxMDU2NTA0MTZ9.oxeTNFYRwWEB0lHWDMEgi89HlLckci4kki8tO62ZW5o';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0bWltbHFjbGhqaWpoaGd0cmF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwNzQ0MTYsImV4cCI6MjEwNTY1MDQxNn0.oxeTNFYRwWEB0lHWDMEgi89HlLckci4kki8tO62ZW5o';
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const appPath = 'geartrack.html';
 

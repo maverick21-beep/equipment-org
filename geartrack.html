@@ -177,6 +177,9 @@
         <label for="checkoutFilter">Filter</label>
         <select id="checkoutFilter">
           <option value="all">All</option>
+          <option value="approved">Approved</option>
+          <option value="pending">Pending</option>
+          <option value="rejected">Rejected</option>
           <option value="active">Active</option>
           <option value="overdue">Overdue</option>
           <option value="returned">Returned</option>
@@ -188,15 +191,18 @@
       </div>
     </div>
 
-    <div class="table-wrap" style="margin-bottom:24px;">
+    <div class="checkout-table-section" id="pendingRejectedSection">
+      <div class="checkout-table-label">Pending / Rejected Requests</div>
+      <div class="table-wrap" style="margin-bottom:24px;">
       <table>
         <thead>
           <tr>
             <th>Borrower</th><th>Recipient</th><th>Equipment</th><th>Qty</th><th>Borrow Date</th><th>Expected Return</th><th>Purpose</th><th>Status</th><th>Action</th>
           </tr>
         </thead>
-        <tbody id="borrowRequestsBody"></tbody>
+        <tbody id="pendingRejectedBody"></tbody>
       </table>
+      </div>
     </div>
 
     <div class="table-wrap" id="returnVerificationPanel" style="margin-bottom:24px; display:none;">
@@ -210,7 +216,9 @@
       </table>
     </div>
 
-    <div class="table-wrap">
+    <div class="checkout-table-section" id="checkoutRecordsSection">
+      <div class="checkout-table-label">Checkout Records</div>
+      <div class="table-wrap">
       <table>
         <thead>
           <tr>
@@ -219,6 +227,7 @@
         </thead>
         <tbody id="coBody"></tbody>
       </table>
+      </div>
     </div>
   </section>
 
