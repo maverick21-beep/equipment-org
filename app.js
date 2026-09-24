@@ -263,9 +263,11 @@ async function loadCheckouts(){
 
 async function loadBorrowRequests(){
   const isAdmin = currentProfile?.role === 'admin';
+  // disambiguate profiles relationship: borrow_requests has two fkeys to profiles
+  // use the user_id foreign key relationship for the requester's profile
   let query = supabaseClient
     .from('borrow_requests')
-    .select('*, items:borrow_request_items(*, equipment:equipment(id, name, available_qty, total_qty)), profile:profiles(id, full_name, email)')
+    .select(`*, items:borrow_request_items(*, equipment:equipment(id, name, available_qty, total_qty)), profile:profiles!borrow_requests_user_id_fkey(id, full_name, email)`) 
     .order('created_at', { ascending: false });
 
   if(!isAdmin){
