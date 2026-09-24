@@ -535,33 +535,6 @@ async function approveBorrowRequest(requestId){
   console.debug('approveBorrowRequest start', { requestId, found: !!request, request });
   if(!request) return;
 
-  const itemResults = [];
-  for(const item of request.items){
-    const { data: equipmentData } = await supabaseClient
-      .from('equipment')
-      .select('*')
-      .eq('id', item.equipmentId)
-      .single();
-
-    if(!equipmentData){
-      alert(`Equipment not found for ${item.equipmentName}.`);
-      return;
-    }
-
-    if(item.qty > equipmentData.available_qty){
-      alert(`Not enough inventory for ${item.equipmentName}. Requested ${item.qty}, available ${equipmentData.available_qty}.`);
-      return;
-    }
-
-    itemResults.push({
-      equipmentId: item.equipmentId,
-      name: item.equipmentName,
-      qty: item.qty,
-      dueDate: item.dueDate,
-      itemId: item.id
-    });
-  }
-
   const { data: requestProfile } = await supabaseClient
     .from('profiles')
     .select('id, full_name, email')
@@ -570,54 +543,29 @@ async function approveBorrowRequest(requestId){
 
   const borrowerName = requestProfile?.full_name || requestProfile?.email || request.borrower;
 
-  for(const item of itemResults){
-    const { data: equipmentData, error: equipmentError } = await supabaseClient
-      .from('equipment')
-      .select('available_qty')
-      .eq('id', item.equipmentId)
-      .single();
+      // Create checkout records (stock is already deducted during request)
+      for(const item of request.items){
+        const { error: checkoutError } = await supabaseClient.from('checkouts').insert({
+          request_item_id: item.id,
+          equipment_id: item.equipmentId,
+          user_id: request.userId,
+          user_name: borrowerName,
+          user_team: null,
+          qty: item.qty,
+          checked_out_at: new Date().toISOString(),
+          due_date: item.dueDate || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
+          status: 'checked_out',
+          processed_by: currentUser.id
+        });
 
-    if(equipmentError || !equipmentData){
-      console.error(equipmentError);
-      alert('Failed to load equipment stock before approval.');
-      return;
-    }
+        if(checkoutError){
+          console.error(checkoutError);
+          alert('Failed to create checkout record.');
+          return;
+        }
+      }
 
-    const { error: checkoutError } = await supabaseClient.from('checkouts').insert({
-      equipment_id: item.equipmentId,
-      user_id: request.userId,
-      user_name: borrowerName,
-      user_team: null,
-      qty: item.qty,
-      checked_out_at: new Date().toISOString(),
-      due_date: item.dueDate || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
-      status: 'checked_out',
-      processed_by: currentUser.id
-    });
-
-    if(checkoutError){
-      console.error(checkoutError);
-      alert('Failed to create checkout record.');
-      return;
-    }
-
-    const newAvailableQty = Math.max(0, Number(equipmentData.available_qty) - Number(item.qty));
-    const { error: stockError } = await supabaseClient
-      .from('equipment')
-      .update({
-        available_qty: newAvailableQty,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', item.equipmentId);
-
-    if(stockError){
-      console.error(stockError);
-      alert('Checkout approved but inventory update failed.');
-      return;
-    }
-  }
-
-  const { error: updateRequestError } = await supabaseClient
+      const { error: updateRequestError } = await supabaseClient
     .from('borrow_requests')
     .update({ status: 'approved', reviewed_by: currentUser.id, reviewed_at: new Date().toISOString() })
     .eq('id', requestId);
@@ -632,6 +580,9 @@ async function approveBorrowRequest(requestId){
 }
 
 async function rejectBorrowRequest(requestId){
+  const request = borrowRequests.find(r => r.id === requestId);
+  if(!request) return;
+
   const { error } = await supabaseClient
     .from('borrow_requests')
     .update({ status: 'rejected', reviewed_by: currentUser.id, reviewed_at: new Date().toISOString() })
@@ -641,6 +592,14 @@ async function rejectBorrowRequest(requestId){
     console.error(error);
     alert('Failed to reject reservation.');
     return;
+  }
+
+  // Restore the reserved stock
+  for (const item of request.items) {
+    await supabaseClient.rpc('increment_equipment_qty', { 
+      equipment_uuid: item.equipmentId, 
+      qty_increment: item.qty 
+    });
   }
 
   await loadAllData();
@@ -972,14 +931,23 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
   });
 
   if(itemError){
-    console.error(itemError);
-    alert(itemError.message || 'Failed to add equipment details to the borrow request.');
-    return;
-  }
+        console.error(itemError);
+        alert(itemError.message || 'Failed to add equipment details to the borrow request.');
+        return;
+      }
 
-  closeBorrowModal();
-  await loadAllData();
-});
+      // Deduct stock immediately upon request to reserve it
+      const { error: stockError } = await supabaseClient.rpc('increment_equipment_qty', { 
+        equipment_uuid: selectedBorrowEquipment.id, 
+        qty_increment: -qty 
+      });
+      if(stockError){
+        console.error("Failed to deduct stock:", stockError);
+      }
+
+      closeBorrowModal();
+      await loadAllData();
+    });
 
 document.getElementById('adminEditForm').addEventListener('submit', async (event) => {
   event.preventDefault();
