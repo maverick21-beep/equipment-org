@@ -23,6 +23,7 @@ let checkoutFilter = 'all';
 let checkoutSearchTerm = '';
 let currentEditEquipmentId = null;
 let selectedBorrowEquipment = null;
+let currentFinishMaintenance = null;
 
 // =====================================================
 // AUTH FUNCTIONS
@@ -207,6 +208,7 @@ async function loadInventory(){
     cat: e.category?.name || 'Uncategorized',
     categoryId: e.category_id || e.category?.id || null,
     have: e.available_qty,
+    maintenanceQty: e.maintenance_qty || 0,
     total: e.total_qty,
     cond: e.condition,
     loc: e.location,
@@ -307,20 +309,51 @@ async function loadBorrowRequests(){
 
 async function loadMaintenance(){
   if(currentProfile?.role !== 'admin'){ maintenanceData = []; return; }
-  let { data } = await supabaseClient
+  const [{ data: taskData }, { data: equipmentData }] = await Promise.all([
+    supabaseClient
     .from('maintenance')
-    .select('*, equipment:equipment(name)')
-    .order('scheduled_date');
-  data = data || [];
-  maintenanceData = data.map(m => ({
+    .select('*, equipment:equipment(id, name, sku, available_qty, total_qty, maintenance_qty, status)')
+    .order('scheduled_date'),
+    supabaseClient
+      .from('equipment')
+      .select('id, name, sku, available_qty, total_qty, maintenance_qty, status')
+      .eq('status', 'maintenance')
+  ]);
+
+  const data = taskData || [];
+  const rows = data.map(m => ({
     id: m.id,
+    equipmentId: m.equipment_id,
+    ref: m.equipment?.sku || '—',
     name: m.equipment?.name || 'Unknown',
     type: m.type,
     priority: m.priority,
     sched: m.scheduled_date,
     tech: m.technician,
-    done: m.status === 'completed'
+    reason: m.notes || 'No maintenance details provided.',
+    quantity: m.equipment?.maintenance_qty || 0,
+    equipmentStatus: m.equipment?.status,
+    done: m.status === 'completed' && m.equipment?.status !== 'maintenance'
   }));
+  const knownEquipmentIds = new Set(rows.map(row => row.equipmentId));
+  const syntheticRows = (equipmentData || [])
+    .filter(item => !knownEquipmentIds.has(item.id))
+    .map(item => ({
+      id: null,
+      equipmentId: item.id,
+      ref: item.sku,
+      name: item.name,
+      type: 'Repair',
+      priority: 'high',
+      sched: null,
+      tech: 'Unassigned',
+      reason: 'Equipment is marked as under maintenance.',
+      quantity: item.maintenance_qty || 0,
+      equipmentStatus: item.status,
+      done: false
+    }));
+
+  maintenanceData = [...rows, ...syntheticRows];
 }
 
 async function loadProcurement(){
@@ -455,7 +488,7 @@ function renderInventory(){
       <td>
         ${isAdmin ?
           '<button type="button" class="inventory-edit-btn" data-action="edit-equipment" data-id="'+i.id+'">Edit</button>' :
-          '<button type="button" class="inventory-edit-btn" data-action="request-borrow" data-id="'+i.id+'" '+(i.have <= 0 ? 'disabled' : '')+'>Borrow</button>'}
+          '<button type="button" class="inventory-edit-btn" data-action="request-borrow" data-id="'+i.id+'" '+(i.have <= 0 || i.rawStatus === 'deactivated' ? 'disabled' : '')+'>Borrow</button>'}
       </td>
     </tr>`).join('');
 }
@@ -722,19 +755,26 @@ function renderMaintenance(){
       <div class="maint-top">
         <div>
           <div class="maint-name">${m.name}</div>
-          <div class="maint-type">${m.type}</div>
+          <div class="maint-type">${m.ref} · ${m.type}</div>
         </div>
         <span class="badge-priority ${m.priority}">${m.priority.toUpperCase()}</span>
       </div>
+      <div class="maint-meta">${m.quantity > 0 ? `Quantity under maintenance <span class="sched-date">${m.quantity}</span>` : m.reason}</div>
       <div class="maint-bottom">
-        <div class="maint-meta">Scheduled <span class="sched-date">${m.sched}</span><span class="tech-label">Technician ${m.tech}</span></div>
+        <div class="maint-meta">Placed <span class="sched-date">${m.sched || '—'}</span><span class="tech-label">Technician ${m.tech}</span></div>
         ${m.done ? '<span class="done-check">✓ DONE</span>' :
-          (isAdmin ? `<button class="btn btn-green" data-id="${m.id}" data-idx="${idx}">Mark Complete</button>` : '')}
+          (isAdmin && m.quantity > 0 ? `<button class="btn btn-green" data-maintenance-action="finish" data-id="${m.id}" data-idx="${idx}">Finish</button>` :
+            (isAdmin && m.id ? `<button class="btn btn-green" data-id="${m.id}" data-idx="${idx}">Mark Complete</button>` : ''))}
       </div>
     </div>`).join('');
 
+  document.querySelectorAll('#maintGrid button[data-maintenance-action="finish"]').forEach(b=>{
+    b.addEventListener('click', ()=>openFinishMaintenanceModal(+b.dataset.idx));
+  });
   document.querySelectorAll('#maintGrid button[data-id]').forEach(b=>{
-    b.addEventListener('click', (ev)=>markMaintenanceDone(b.dataset.id, +b.dataset.idx, ev));
+    if(b.dataset.maintenanceAction !== 'finish'){
+      b.addEventListener('click', (ev)=>markMaintenanceDone(b.dataset.id, +b.dataset.idx, ev));
+    }
   });
 }
 
@@ -833,11 +873,22 @@ document.addEventListener('click', e => {
   if(e.target.matches('[data-close-borrow="true"]') || e.target.id === 'closeBorrowModal' || e.target.id === 'cancelBorrowModal'){
     closeBorrowModal();
   }
+
+  if(e.target.matches('[data-close-maintenance="true"]') || e.target.id === 'closeFinishMaintenanceModal' || e.target.id === 'cancelFinishMaintenanceModal'){
+    closeFinishMaintenanceModal();
+  }
 });
 
 function openBorrowModal(equipmentId){
   const item = inventory.find(i => i.id === equipmentId);
   if(!item) return;
+
+  if(item.rawStatus === 'deactivated' || item.have <= 0){
+    alert(item.rawStatus === 'maintenance' && item.have <= 0
+      ? 'This equipment is currently under maintenance and cannot be borrowed.'
+      : 'This equipment is not currently available for borrowing.');
+    return;
+  }
 
   selectedBorrowEquipment = item;
   const form = document.getElementById('borrowForm');
@@ -873,6 +924,91 @@ function closeBorrowModal(){
   document.getElementById('borrowForm')?.reset();
 }
 
+function updateFinishMaintenanceValidation(){
+  const readyInput = document.getElementById('finishMaintenanceReady');
+  const needsInput = document.getElementById('finishMaintenanceNeeds');
+  const message = document.getElementById('finishMaintenanceValidation');
+  const submit = document.getElementById('finishMaintenanceSubmit');
+  if(!readyInput || !needsInput || !message || !submit) return false;
+
+  const maintenanceQuantity = currentFinishMaintenance?.quantity || 0;
+  const ready = Number(readyInput.value);
+  const needs = Number(needsInput.value);
+  const validValues = Number.isInteger(ready) && Number.isInteger(needs) && ready >= 0 && needs >= 0;
+  const validTotal = validValues && ready + needs === maintenanceQuantity;
+  const accounted = validValues ? ready + needs : 0;
+
+  message.textContent = validTotal
+    ? `Total accounted for: ${accounted} / ${maintenanceQuantity} — Ready to complete maintenance.`
+    : `Total accounted for: ${accounted} / ${maintenanceQuantity}. Ready to Use + Needs Maintenance must equal ${maintenanceQuantity}.`;
+  message.style.color = validTotal ? 'var(--green)' : 'var(--red)';
+  submit.disabled = !validTotal;
+  return validTotal;
+}
+
+function openFinishMaintenanceModal(index){
+  const record = maintenanceData[index];
+  if(!record || !record.id || record.quantity <= 0) return;
+
+  currentFinishMaintenance = record;
+  document.getElementById('finishMaintenanceEquipment').value = record.name;
+  document.getElementById('finishMaintenanceReference').value = record.ref;
+  document.getElementById('finishMaintenanceQuantity').value = record.quantity;
+  document.getElementById('finishMaintenanceStatus').value = 'Maintenance';
+  document.getElementById('finishMaintenanceReason').value = record.reason;
+  document.getElementById('finishMaintenanceReady').value = '';
+  document.getElementById('finishMaintenanceNeeds').value = '';
+  updateFinishMaintenanceValidation();
+
+  const modal = document.getElementById('finishMaintenanceModal');
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeFinishMaintenanceModal(){
+  const modal = document.getElementById('finishMaintenanceModal');
+  if(modal){
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  currentFinishMaintenance = null;
+  document.getElementById('finishMaintenanceForm')?.reset();
+}
+
+document.getElementById('finishMaintenanceReady').addEventListener('input', updateFinishMaintenanceValidation);
+document.getElementById('finishMaintenanceNeeds').addEventListener('input', updateFinishMaintenanceValidation);
+
+document.getElementById('finishMaintenanceForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if(!currentFinishMaintenance || !updateFinishMaintenanceValidation()) return;
+
+  const ready = Number(document.getElementById('finishMaintenanceReady').value);
+  const needs = Number(document.getElementById('finishMaintenanceNeeds').value);
+  const submit = document.getElementById('finishMaintenanceSubmit');
+  submit.disabled = true;
+  submit.textContent = 'SAVING...';
+
+  const { error } = await supabaseClient.rpc('finish_equipment_maintenance', {
+    maintenance_uuid: currentFinishMaintenance.id,
+    ready_quantity: ready,
+    needs_maintenance_quantity: needs
+  });
+
+  if(error){
+    console.error(error);
+    submit.disabled = false;
+    submit.textContent = 'Finish Maintenance';
+    alert(error.message || 'Failed to finish maintenance.');
+    return;
+  }
+
+  closeFinishMaintenanceModal();
+  await loadAllData();
+  alert(needs > 0
+    ? `Maintenance updated. ${ready} items are now available and ${needs} items remain under maintenance.`
+    : `Maintenance completed successfully. All ${ready} items are now available.`);
+});
+
 document.getElementById('borrowForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   if(!selectedBorrowEquipment){ return; }
@@ -904,9 +1040,9 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
     return;
   }
 
-  const { error: reserveError } = await supabaseClient.rpc('increment_equipment_qty', {
+  const { error: reserveError } = await supabaseClient.rpc('reserve_equipment_qty', {
     equipment_uuid: selectedBorrowEquipment.id,
-    qty_increment: -qty
+    qty_requested: qty
   });
 
   if(reserveError){
@@ -974,23 +1110,61 @@ document.getElementById('adminEditForm').addEventListener('submit', async (event
   if(!currentEditEquipmentId) return;
 
   const form = event.currentTarget;
+  const item = inventory.find(i => i.id === currentEditEquipmentId);
   const availableQty = Number(form.availableStock.value);
   const totalQty = Number(form.totalStock.value);
+
+  if(!item) return;
 
   if(totalQty < availableQty){
     alert('Total stock cannot be less than available stock.');
     return;
   }
 
-  const payload = {
+  if(item.rawStatus === 'maintenance' && item.maintenanceQty > 0 && form.status.value !== 'maintenance'){
+    alert('Finish the maintenance inspection before changing this equipment status.');
+    return;
+  }
+
+  const basePayload = {
     name: form.equipmentName.value.trim(),
     category_id: form.equipmentCategory.value,
-    available_qty: availableQty,
     total_qty: totalQty,
     condition: form.condition.value,
-    location: form.location.value.trim(),
-    status: form.status.value
+    location: form.location.value.trim()
   };
+
+  if(form.status.value === 'maintenance' && item.rawStatus !== 'maintenance'){
+    const { error: prepareError } = await supabaseClient
+      .from('equipment')
+      .update(basePayload)
+      .eq('id', currentEditEquipmentId);
+
+    if(prepareError){
+      console.error(prepareError);
+      alert(prepareError.message || 'Failed to update equipment.');
+      return;
+    }
+
+    const { error: maintenanceError } = await supabaseClient.rpc('start_equipment_maintenance', {
+      equipment_uuid: currentEditEquipmentId,
+      maintenance_reason: 'Equipment placed in maintenance from Inventory.'
+    });
+
+    if(maintenanceError){
+      console.error(maintenanceError);
+      alert(maintenanceError.message || 'Failed to start maintenance.');
+      return;
+    }
+
+    closeEquipmentModal();
+    await loadAllData();
+    return;
+  }
+
+  const payload = form.status.value === 'maintenance'
+    ? { ...basePayload, status: 'maintenance' }
+    : { ...basePayload, available_qty: availableQty, status: form.status.value };
 
   const { error } = await supabaseClient.from('equipment').update(payload).eq('id', currentEditEquipmentId);
   if(error){
