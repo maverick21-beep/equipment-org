@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GearTrack — Equipment Management</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<!-- Supabase Client -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<!-- Loading / Auth wrappers -->
+<div id="loadingView" class="active">
+  <div class="loading-wrap">
+    <div class="spinner"></div>
+    <div class="loading-text">LOADING GEARTRACK...</div>
+  </div>
+</div>
+
+<div id="authView">
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="brand" style="margin-bottom:20px; gap:12px;">
+        <div class="brand-icon"><span></span><span></span><span></span><span></span></div>
+        <div style="display:flex; flex-direction:column;">
+          <div class="brand-name">GEARTRACK</div>
+        </div>
+      </div>
+      <h1 id="authTitle">Sign In</h1>
+      <div class="sub">Equipment Management Portal</div>
+
+      <div id="authError" class="auth-error"></div>
+
+      <div id="fullNameField" class="form-field" style="display:none;">
+        <label>Full Name</label>
+        <input type="text" id="fullName" placeholder="Your name">
+      </div>
+      <div class="form-field">
+        <label>Email</label>
+        <input type="email" id="loginEmail" name="email" placeholder="you@example.com" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="email">
+      </div>
+      <div class="form-field">
+        <label>Password</label>
+        <input type="password" id="loginPassword" name="password" placeholder="••••••••" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </div>
+
+      <button class="btn btn-orange" id="authBtn" style="width:100%; padding:12px; font-size:13px;">SIGN IN</button>
+
+      <div class="auth-toggle">
+        <span id="authToggleLabel">Don't have an account?</span>
+        <a id="authToggle">Sign up</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- App shell (hidden until authenticated) -->
+<div id="appShell" style="display:none;">
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-icon"><span></span><span></span><span></span><span></span></div>
+    <div class="brand-name">GEARTRACK</div>
+    <div class="admin-tag" id="roleTag">USER</div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-view="dashboard" class="active">DASHBOARD</button>
+    <button data-view="inventory">INVENTORY</button>
+    <button data-view="checkouts">CHECKOUTS</button>
+    <button data-view="maintenance">MAINTENANCE</button>
+    <button data-view="procurement">PROCUREMENT <span class="count" id="poCount">0</span></button>
+  </nav>
+  <div class="topbar-right">
+    <div class="overdue-pill" id="overduePill">0 OVERDUE</div>
+    <div class="notification-wrap">
+      <button type="button" class="notification-btn" id="notificationButton" aria-label="Notifications" aria-expanded="false">
+        <span aria-hidden="true">!</span>
+        <span class="notification-count" id="notificationCount" hidden>0</span>
+      </button>
+      <div class="notification-panel hidden" id="notificationPanel" aria-hidden="true">
+        <div class="notification-head">
+          <strong>Notifications</strong>
+          <button type="button" class="notification-read-all" id="markAllNotifications">Mark all read</button>
+        </div>
+        <div class="notification-list" id="notificationList"></div>
+      </div>
+    </div>
+    <div class="avatar" id="userAvatar">U</div>
+    <button class="logout-btn" id="logoutBtn">Logout</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- DASHBOARD -->
+  <section class="view active" id="view-dashboard">
+    <div class="page-head">
+      <h1 class="glitch">Equipment Overview</h1>
+      <div class="page-sub">Season 2026 · Athletic Department</div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card" style="--stat-color:var(--orange)">
+        <div class="stat-label">Total Items</div>
+        <div class="stat-value">265</div>
+        <div class="stat-foot">across all categories</div>
+      </div>
+      <div class="stat-card" style="--stat-color:var(--green)">
+        <div class="stat-label">Available</div>
+        <div class="stat-value">183</div>
+        <div class="stat-foot">69% of inventory</div>
+      </div>
+      <div class="stat-card" style="--stat-color:var(--red)">
+        <div class="stat-label">Checked Out</div>
+        <div class="stat-value" id="dashCheckedOut">5</div>
+        <div class="stat-foot" id="dashOverdueFoot">2 overdue</div>
+      </div>
+      <div class="stat-card" style="--stat-color:var(--yellow)">
+        <div class="stat-label">Pending Service</div>
+        <div class="stat-value" id="dashPending">4</div>
+        <div class="stat-foot">maintenance tasks</div>
+      </div>
+    </div>
+
+    <div class="panel-grid">
+      <div class="panel">
+        <h2>Inventory by Category</h2>
+        <div id="catRows"></div>
+      </div>
+      <div class="panel">
+        <h2>Active Checkouts</h2>
+        <div id="dashCheckoutList"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INVENTORY -->
+  <section class="view" id="view-inventory">
+    <div class="head-row">
+      <div>
+        <h1 class="glitch">Inventory</h1>
+        <div class="page-sub" id="invSub">12 items · Last synced 2026-09-19</div>
+      </div>
+      <div class="chip-row" id="invFilters">
+        <button class="chip active" data-cat="ALL">ALL</button>
+        <button class="chip" data-cat="Ball Games">BALL GAMES</button>
+        <button class="chip" data-cat="Racket Sports">RACKET SPORTS</button>
+        <button class="chip" data-cat="Combative Sports">COMBATIVE SPORTS</button>
+        <button class="chip" data-cat="Athletics">ATHLETICS</button>
+        <button class="chip" data-cat="Aquatic Sports">AQUATIC SPORTS</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>Equipment</th><th>Category</th><th>Stock</th><th>Condition</th><th>Location</th><th>Status</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="invBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- CHECKOUTS -->
+  <section class="view" id="view-checkouts">
+    <div class="page-head">
+      <h1 class="glitch">Checkouts</h1>
+      <div class="page-sub" id="coSub">5 active · 2 overdue</div>
+    </div>
+    <div class="alert-banner" id="coAlert">⚠ <strong id="coAlertText">2 checkouts past due date</strong>&nbsp;— contact athletes immediately</div>
+
+    <div class="checkout-toolbar">
+      <div class="toolbar-group">
+        <label for="checkoutFilter">Filter</label>
+        <select id="checkoutFilter">
+          <option value="all">All</option>
+          <option value="active">Active</option>
+          <option value="overdue">Overdue</option>
+          <option value="returned">Returned</option>
+        </select>
+      </div>
+      <div class="toolbar-group toolbar-search">
+        <label for="checkoutSearch">Search</label>
+        <input id="checkoutSearch" type="search" placeholder="Search borrower or equipment">
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-bottom:24px;">
+      <table>
+        <thead>
+          <tr>
+            <th>Borrower</th><th>Recipient</th><th>Equipment</th><th>Qty</th><th>Borrow Date</th><th>Expected Return</th><th>Purpose</th><th>Status</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="borrowRequestsBody"></tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap" id="returnVerificationPanel" style="margin-bottom:24px; display:none;">
+      <table>
+        <thead>
+          <tr>
+            <th>Ref</th><th>Equipment</th><th>Borrower</th><th>Qty</th><th>Checked Out</th><th>Due Return</th><th>Requested</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="returnRequestsBody"></tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Ref</th><th>Equipment</th><th>Athlete</th><th>Recipient</th><th>Purpose</th><th>Checked Out</th><th>Due Return</th><th>Qty</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="coBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- MAINTENANCE -->
+  <section class="view" id="view-maintenance">
+    <div class="page-head">
+      <h1 class="glitch">Maintenance</h1>
+      <div class="page-sub" id="maintSub">4 pending · 1 completed</div>
+    </div>
+    <div class="maint-grid" id="maintGrid"></div>
+  </section>
+
+  <!-- PROCUREMENT -->
+  <section class="view" id="view-procurement">
+    <div class="page-head">
+      <h1 class="glitch">Procurement</h1>
+      <div class="page-sub" id="procSub">2 pending orders · $1,860 total</div>
+    </div>
+    <div class="po-grid" id="poGrid"></div>
+  </section>
+
+</main>
+</div>
+
+<div id="appNotice" class="app-notice" role="status" aria-live="polite"></div>
+
+<div id="adminEditModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="editEquipmentTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Admin Tools</div>
+        <h3 id="editEquipmentTitle">Edit Equipment</h3>
+      </div>
+      <button type="button" class="modal-close" id="closeEditModal" aria-label="Close modal">×</button>
+    </div>
+
+    <form id="adminEditForm">
+      <div class="form-grid">
+        <div class="form-field modal-field">
+          <label for="editEquipmentName">Equipment</label>
+          <input id="editEquipmentName" name="equipmentName" type="text" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="editEquipmentCategory">Category</label>
+          <select id="editEquipmentCategory" name="equipmentCategory"></select>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="editEquipmentAvailable">Available Stock</label>
+          <input id="editEquipmentAvailable" name="availableStock" type="number" min="0" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="editEquipmentTotal">Total Stock</label>
+          <input id="editEquipmentTotal" name="totalStock" type="number" min="0" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="editEquipmentCondition">Condition</label>
+          <select id="editEquipmentCondition" name="condition">
+            <option value="Excellent">Excellent</option>
+            <option value="Good">Good</option>
+            <option value="Fair">Fair</option>
+            <option value="Poor">Poor</option>
+          </select>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="editEquipmentLocation">Location</label>
+          <input id="editEquipmentLocation" name="location" type="text" required>
+        </div>
+
+        <div class="form-field modal-field modal-span">
+          <label for="editEquipmentStatus">Status</label>
+          <select id="editEquipmentStatus" name="status">
+            <option value="available">Available</option>
+            <option value="maintenance">Maintenance</option>
+            <option value="deactivated">Deactivated</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="cancelEditModal">Cancel</button>
+        <button type="submit" class="btn btn-orange">Save Changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="borrowModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close-borrow="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="borrowEquipmentTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Borrow Request</div>
+        <h3 id="borrowEquipmentTitle">Request Equipment</h3>
+      </div>
+      <button type="button" class="modal-close" id="closeBorrowModal" aria-label="Close borrow modal">×</button>
+    </div>
+
+    <form id="borrowForm">
+      <div class="form-grid">
+        <div class="form-field modal-field modal-span">
+          <label for="borrowEquipmentName">Equipment</label>
+          <input id="borrowEquipmentName" type="text" readonly>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="borrowQty">Quantity</label>
+          <input id="borrowQty" name="borrowQty" type="number" min="1" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="borrowOrganization">Organization / Group / Student / Person</label>
+          <input id="borrowOrganization" name="borrowOrganization" type="text" placeholder="e.g. Volleyball Team, Student Council, Jane Doe" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="borrowStartDate">Start Date</label>
+          <input id="borrowStartDate" name="borrowStartDate" type="date" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="borrowEndDate">End Date</label>
+          <input id="borrowEndDate" name="borrowEndDate" type="date" required>
+        </div>
+
+        <div class="form-field modal-field modal-span">
+          <label for="borrowPurpose">Purpose of Use</label>
+          <textarea id="borrowPurpose" name="borrowPurpose" rows="4" placeholder="Describe how the equipment will be used..." required></textarea>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="cancelBorrowModal">Cancel</button>
+        <button type="submit" class="btn btn-orange">Submit Request</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="finishMaintenanceModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close-maintenance="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="finishMaintenanceTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Maintenance Result</div>
+        <h3 id="finishMaintenanceTitle">Finish Maintenance</h3>
+      </div>
+      <button type="button" class="modal-close" id="closeFinishMaintenanceModal" aria-label="Close maintenance modal">×</button>
+    </div>
+
+    <form id="finishMaintenanceForm">
+      <div class="form-grid">
+        <div class="form-field modal-field">
+          <label>Equipment</label>
+          <input id="finishMaintenanceEquipment" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Reference ID</label>
+          <input id="finishMaintenanceReference" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Quantity Under Maintenance</label>
+          <input id="finishMaintenanceQuantity" type="number" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Status</label>
+          <input id="finishMaintenanceStatus" type="text" readonly>
+        </div>
+        <div class="form-field modal-field modal-span">
+          <label>Maintenance Details</label>
+          <textarea id="finishMaintenanceReason" rows="3" readonly></textarea>
+        </div>
+        <div class="form-field modal-field">
+          <label for="finishMaintenanceReady">Ready to Use</label>
+          <input id="finishMaintenanceReady" type="number" min="0" step="1" required>
+        </div>
+        <div class="form-field modal-field">
+          <label for="finishMaintenanceNeeds">Needs Maintenance</label>
+          <input id="finishMaintenanceNeeds" type="number" min="0" step="1" required>
+        </div>
+      </div>
+
+      <div id="finishMaintenanceValidation" class="dim" aria-live="polite">Total accounted for: 0 / 0</div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="cancelFinishMaintenanceModal">Cancel</button>
+        <button type="submit" class="btn btn-orange" id="finishMaintenanceSubmit" disabled>Finish Maintenance</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="returnModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close-return="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="returnTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Early Return Request</div>
+        <h3 id="returnTitle">Return Equipment</h3>
+      </div>
+      <button type="button" class="modal-close" id="closeReturnModal" aria-label="Close return modal">×</button>
+    </div>
+
+    <form id="returnForm">
+      <div class="form-grid">
+        <div class="form-field modal-field">
+          <label>Equipment</label>
+          <input id="returnEquipmentName" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Reference ID</label>
+          <input id="returnReference" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Checked Out Quantity</label>
+          <input id="returnCheckedOutQuantity" type="number" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label for="returnQuantity">Quantity to Return</label>
+          <input id="returnQuantity" name="returnQuantity" type="number" min="1" required>
+        </div>
+        <div class="form-field modal-field">
+          <label>Received By</label>
+          <input id="returnReceivedBy" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Checked Out</label>
+          <input id="returnCheckedOutAt" type="text" readonly>
+        </div>
+        <div class="form-field modal-field modal-span">
+          <label>Due Return</label>
+          <input id="returnDueDate" type="text" readonly>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="cancelReturnModal">Cancel</button>
+        <button type="submit" class="btn btn-orange">Request Return</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="adminReturnModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close-admin-return="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="adminReturnTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Return Verification</div>
+        <h3 id="adminReturnTitle">Review Return</h3>
+      </div>
+      <button type="button" class="modal-close" id="closeAdminReturnModal" aria-label="Close return review modal">×</button>
+    </div>
+
+    <form id="adminReturnForm">
+      <div class="form-grid">
+        <div class="form-field modal-field">
+          <label>Equipment</label>
+          <input id="adminReturnEquipmentName" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Reference ID</label>
+          <input id="adminReturnReference" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Borrower / Recipient</label>
+          <input id="adminReturnBorrower" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Quantity Requested</label>
+          <input id="adminReturnQuantity" type="number" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Original Checkout Quantity</label>
+          <input id="adminReturnCheckoutQuantity" type="number" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Checked Out</label>
+          <input id="adminReturnCheckedOutAt" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Due Return</label>
+          <input id="adminReturnDueDate" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Requested</label>
+          <input id="adminReturnRequestedAt" type="text" readonly>
+        </div>
+        <div class="form-field modal-field modal-span">
+          <label for="adminReturnReason">Rejection Reason (optional)</label>
+          <textarea id="adminReturnReason" rows="3"></textarea>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="rejectReturnButton">Reject Return</button>
+        <button type="submit" class="btn btn-green">Confirm Return</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="app.js" defer></script>
+</body>
+</html>

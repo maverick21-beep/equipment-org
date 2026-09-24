@@ -242,6 +242,7 @@ document.getElementById('logoutBtn').addEventListener('click', async ()=>{
   document.getElementById('loginPassword').value = '';
   document.getElementById('fullName').value = '';
   await supabaseClient.auth.signOut();
+  window.location.replace('index.html');
 });
 
 supabaseClient.auth.onAuthStateChange(async (event, session) => {
@@ -268,6 +269,10 @@ async function loadCurrentProfile(){
 }
 
 function showAuthScreen(){
+  if(window.location.pathname.endsWith('/geartrack.html') || window.location.pathname.endsWith('geartrack.html')){
+    window.location.replace('index.html');
+    return;
+  }
   resetAuthButton();
   const loadingView = document.getElementById('loadingView');
   const appShell = document.getElementById('appShell');

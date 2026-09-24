@@ -9,8 +9,10 @@ GearTrack is a static HTML/CSS/JS app backed by Supabase (Postgres + Auth + RLS)
   - Auth: sign up, sign in, sign out, session restore, and profile fetch.
   - Data loading: inventory, checkouts, maintenance, purchase orders.
   - Notifications: persistent per-user notifications with Supabase Realtime updates.
-- Deployment fix:
-  - Renamed `geartrack.html` to `index.html` so Netlify serves the site at `/` (prevents 404).
+- Public entry flow:
+  - `index.html` is the public landing page with Supabase login and registration.
+  - `geartrack.html` is the protected Supabase-backed application.
+  - Authenticated users are redirected to `geartrack.html`; unauthenticated users are redirected to `index.html`.
 - Frontend alignment fixes to follow the final schema:
   - Procurement status label for `shipped` is displayed correctly.
   - Admin-only behaviors are consistent (maintenance/procurement).
@@ -19,7 +21,11 @@ GearTrack is a static HTML/CSS/JS app backed by Supabase (Postgres + Auth + RLS)
 
 ## Files
 
-- `index.html` — main frontend (currently includes HTML + CSS + JS in one file)
+- `index.html` — public landing page and authentication entry point
+- `landing.js` — Supabase login, registration, and landing-page session redirect
+- `geartrack.html` — authenticated GearTrack application shell
+- `app.js` — authenticated application logic and Supabase data loading
+- `styles.css` — shared landing and application styles
 - `supabase_s.sql` — final Supabase schema + seed data + RLS policies + RPC function
 - `GearTrack_Milestones_for_Trae_AI.md` — milestone plan
 
@@ -69,6 +75,8 @@ The notification table, RLS policies, database triggers, and Supabase Realtime p
 
 Open `index.html` in a browser via a local static server (recommended):
 - VS Code “Live Server” extension, or any simple local server
+
+After signing in, the app opens at `geartrack.html`. Do not open `geartrack.html` directly without an authenticated Supabase session; it redirects back to `index.html`.
 
 ## Deployment (Recommended Workflow)
 
