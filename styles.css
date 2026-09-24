@@ -750,9 +750,20 @@
   }
 
   /* ---------- Public landing page ---------- */
-  .landing-page{ background:var(--bg); overflow-x:hidden; }
+  .landing-page{
+    position:relative;
+    background:
+      linear-gradient(180deg, rgba(10,11,16,0.35) 0%, rgba(10,11,16,0.72) 42%, var(--bg) 78%),
+      url('bg-pattern.svg') center top / cover no-repeat fixed,
+      var(--bg);
+    overflow-x:hidden;
+  }
   .landing-page a{ color:inherit; }
   .landing-shell{ min-height:100vh; }
+  @media (max-width:900px){
+    /* background-attachment:fixed is unreliable on mobile browsers; fall back to scroll */
+    .landing-page{ background-attachment:scroll, scroll; }
+  }
   .landing-nav{
     position:sticky; top:0; z-index:100; display:flex; align-items:center; gap:28px;
     padding:16px 32px; background:rgba(10,11,16,.86); backdrop-filter:blur(10px);
@@ -784,7 +795,12 @@
   .landing-secondary{ padding:14px 26px; border:1px solid var(--panel-border); border-radius:8px; text-decoration:none; font:600 14.5px var(--font-display); }
   .landing-secondary:hover{ border-color:var(--text-dim); }
   .landing-preview,.landing-panel{ background:var(--panel); border:1px solid var(--panel-border); border-radius:12px; padding:20px 22px; box-shadow:0 25px 55px rgba(0,0,0,.28); }
-  .landing-preview{ transform:rotate(-2deg); }
+  .landing-preview{ position:relative; z-index:1; transform:rotate(-2deg); }
+  .landing-preview::before{
+    content:''; position:absolute; inset:-60px -40px; z-index:-1;
+    background:radial-gradient(closest-side, rgba(242,101,15,.24), transparent 70%);
+    filter:blur(10px);
+  }
   .preview-dots{ display:flex; gap:6px; margin-bottom:16px; }
   .preview-dots span{ width:9px; height:9px; border-radius:50%; background:#2a2d3d; }
   .preview-stats{ display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px; }
