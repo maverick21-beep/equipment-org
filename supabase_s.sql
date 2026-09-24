@@ -89,11 +89,14 @@ CREATE TABLE IF NOT EXISTS borrow_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   purpose TEXT,
+  organization_name TEXT,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
   reviewed_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
   reviewed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE borrow_requests ADD COLUMN IF NOT EXISTS organization_name TEXT;
 
 -- =====================================================
 -- TABLE 5: borrow_request_items
@@ -413,3 +416,16 @@ GRANT EXECUTE ON FUNCTION increment_equipment_qty(UUID, INTEGER) TO authenticate
 -- real authenticated users that already exist in Supabase Auth.
 -- After you create test accounts, we can seed checkouts with those real IDs.
 
+-- Add organization_name to borrow_requests if missing
+ALTER TABLE public.borrow_requests
+  ADD COLUMN IF NOT EXISTS organization_name TEXT;
+
+-- Helpful indexes (no-op if already present)
+CREATE INDEX IF NOT EXISTS idx_borrow_requests_user_id
+  ON public.borrow_requests (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_borrow_request_items_request_id
+  ON public.borrow_request_items (request_id);
+
+CREATE INDEX IF NOT EXISTS idx_borrow_request_items_equipment_id
+  ON public.borrow_request_items (equipment_id);
