@@ -337,6 +337,58 @@
   </div>
 </div>
 
+<div id="finishMaintenanceModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close-maintenance="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="finishMaintenanceTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Maintenance Result</div>
+        <h3 id="finishMaintenanceTitle">Finish Maintenance</h3>
+      </div>
+      <button type="button" class="modal-close" id="closeFinishMaintenanceModal" aria-label="Close maintenance modal">×</button>
+    </div>
+
+    <form id="finishMaintenanceForm">
+      <div class="form-grid">
+        <div class="form-field modal-field">
+          <label>Equipment</label>
+          <input id="finishMaintenanceEquipment" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Reference ID</label>
+          <input id="finishMaintenanceReference" type="text" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Quantity Under Maintenance</label>
+          <input id="finishMaintenanceQuantity" type="number" readonly>
+        </div>
+        <div class="form-field modal-field">
+          <label>Status</label>
+          <input id="finishMaintenanceStatus" type="text" readonly>
+        </div>
+        <div class="form-field modal-field modal-span">
+          <label>Maintenance Details</label>
+          <textarea id="finishMaintenanceReason" rows="3" readonly></textarea>
+        </div>
+        <div class="form-field modal-field">
+          <label for="finishMaintenanceReady">Ready to Use</label>
+          <input id="finishMaintenanceReady" type="number" min="0" step="1" required>
+        </div>
+        <div class="form-field modal-field">
+          <label for="finishMaintenanceNeeds">Needs Maintenance</label>
+          <input id="finishMaintenanceNeeds" type="number" min="0" step="1" required>
+        </div>
+      </div>
+
+      <div id="finishMaintenanceValidation" class="dim" aria-live="polite">Total accounted for: 0 / 0</div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="cancelFinishMaintenanceModal">Cancel</button>
+        <button type="submit" class="btn btn-orange" id="finishMaintenanceSubmit" disabled>Finish Maintenance</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script src="app.js" defer></script>
 </body>
 </html>
