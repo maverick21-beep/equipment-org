@@ -237,12 +237,14 @@ function mapEquipStatus(status, have, total){
 async function loadCheckouts(){
   let { data } = await supabaseClient
     .from('checkouts')
-    .select('*, equipment:equipment(name, sku)')
+    .select('*, equipment:equipment(name, sku), request_item:borrow_request_items(request:borrow_requests(purpose, organization_name))')
     .order('checked_out_at', { ascending: false });
   data = data || [];
   const today = new Date();
   today.setHours(0,0,0,0);
   checkouts = data.map((c, idx) => {
+    const requestItem = Array.isArray(c.request_item) ? c.request_item[0] : c.request_item;
+    const request = Array.isArray(requestItem?.request) ? requestItem.request[0] : requestItem?.request;
     const due = new Date(c.due_date); due.setHours(0,0,0,0);
     const overdue = c.status === 'checked_out' && due < today;
     return {
@@ -251,6 +253,8 @@ async function loadCheckouts(){
       name: c.equipment?.name || 'Unknown item',
       athlete: c.user_name,
       team: c.user_team || '',
+      organizationName: request?.organization_name || c.user_team || '—',
+      purpose: request?.purpose || '—',
       out: (c.checked_out_at || '').slice(0,10),
       due: c.due_date,
       qty: c.qty,
@@ -483,7 +487,7 @@ function renderBorrowRequests(){
     const emptyMessage = isAdmin
       ? 'No equipment reservations waiting for approval.'
       : 'You have no equipment requests yet. Choose Borrow on an item to submit one.';
-    body.innerHTML = `<tr><td colspan="8" class="dim">${emptyMessage}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="dim">${emptyMessage}</td></tr>`;
     return;
   }
 
@@ -498,13 +502,13 @@ function renderBorrowRequests(){
           <div class="strong">${req.borrower}</div>
           <div class="mono dim">${req.email || req.organizationName}</div>
         </td>
+        <td>${req.organizationName}</td>
         <td>${itemText}</td>
         <td>${req.items.reduce((sum, item) => sum + Number(item.qty || 0), 0)}</td>
         <td class="mono dim">${firstItem.borrowDate || '—'}</td>
         <td class="mono dim">${firstItem.dueDate || '—'}</td>
         <td>
           <div class="strong">${req.purpose}</div>
-          <div class="mono dim">${req.organizationName}</div>
         </td>
         <td><span class="pill ${statusClass}">${req.status}</span></td>
         <td>
@@ -620,7 +624,7 @@ function getFilteredCheckouts(){
 
     if(!searchValue) return matchesFilter;
 
-    const searchText = `${c.athlete} ${c.name} ${c.team} ${c.ref}`.toLowerCase();
+    const searchText = `${c.athlete} ${c.name} ${c.team} ${c.organizationName} ${c.purpose} ${c.ref}`.toLowerCase();
     return matchesFilter && searchText.includes(searchValue);
   });
 }
@@ -638,7 +642,7 @@ function renderCheckouts(){
 
   const body = document.getElementById('coBody');
   if(!body) return;
-  if(!filtered.length){ body.innerHTML = '<tr><td colspan="8" class="dim">No matching checkouts found.</td></tr>'; return; }
+  if(!filtered.length){ body.innerHTML = '<tr><td colspan="9" class="dim">No matching checkouts found.</td></tr>'; return; }
 
   const isAdmin = currentProfile?.role === 'admin';
   body.innerHTML = filtered.map(c=>`
@@ -646,7 +650,8 @@ function renderCheckouts(){
       <td class="mono">${c.ref}</td>
       <td class="strong">${c.name}</td>
       <td>${c.athlete}</td>
-      <td class="dim">${c.team||'-'}</td>
+      <td class="dim">${c.organizationName}</td>
+      <td>${c.purpose}</td>
       <td class="mono dim">${c.out}</td>
       <td class="mono ${c.overdue && !c.returned?'due-warn':'dim'}">${c.overdue && !c.returned?'⚠ ':''}${c.due}</td>
       <td class="strong">${c.qty}</td>
