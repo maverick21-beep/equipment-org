@@ -29,6 +29,64 @@ let currentReturnCheckout = null;
 let currentAdminReturnRequest = null;
 let notifications = [];
 let notificationChannel = null;
+let inventoryLastSyncedAt = null;
+const THEME_STORAGE_KEY = 'geartrack-theme';
+
+function formatLocalDateInput(date){
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 10);
+}
+
+function dateAfterDays(days){
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return formatLocalDateInput(date);
+}
+
+function updateCurrentPeriod(){
+  const period = document.getElementById('currentPeriod');
+  if(!period) return;
+  const monthYear = new Intl.DateTimeFormat(undefined, { month:'long', year:'numeric' }).format(new Date());
+  period.textContent = `${monthYear} · Athletic Department`;
+}
+
+function formatLocalDateTime(value){
+  return new Intl.DateTimeFormat(undefined, { dateStyle:'medium', timeStyle:'short' }).format(value);
+}
+
+updateCurrentPeriod();
+setInterval(updateCurrentPeriod, 60 * 1000);
+
+function applyTheme(theme){
+  const selectedTheme = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = selectedTheme;
+
+  const toggle = document.getElementById('themeToggle');
+  if(toggle){
+    const nextTheme = selectedTheme === 'light' ? 'dark' : 'light';
+    toggle.setAttribute('aria-label', `Switch to ${nextTheme} mode`);
+    toggle.title = `Switch to ${nextTheme} mode`;
+    toggle.innerHTML = `<span aria-hidden="true">${selectedTheme === 'light' ? '☾' : '☼'}</span>`;
+  }
+}
+
+let savedTheme = 'dark';
+try {
+  savedTheme = localStorage.getItem(THEME_STORAGE_KEY) || 'dark';
+} catch(error){
+  console.warn('Theme preference could not be loaded:', error);
+}
+applyTheme(savedTheme);
+
+document.getElementById('themeToggle')?.addEventListener('click', () => {
+  const nextTheme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  applyTheme(nextTheme);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+  } catch(error){
+    console.warn('Theme preference could not be saved:', error);
+  }
+});
 
 // =====================================================
 // AUTH FUNCTIONS
@@ -296,6 +354,9 @@ function showAppShell(){
     tag.style.color = currentProfile?.role === 'admin' ? 'var(--orange)' : 'var(--text-dim)';
   }
 
+  const inventoryActions = document.getElementById('inventoryActions');
+  if(inventoryActions) inventoryActions.style.display = currentProfile?.role === 'admin' ? 'flex' : 'none';
+
   const name = currentProfile?.full_name || currentUser?.email || 'U';
   const initials = name.split(/\s+/).map(s=>s[0]).join('').slice(0,2).toUpperCase();
   const avatar = document.getElementById('userAvatar');
@@ -346,6 +407,7 @@ async function loadInventory(){
     .select('*, category:equipment_categories(name, id)')
     .order('sku');
 
+  inventoryLastSyncedAt = new Date();
   data = data || [];
   inventory = data.map(e => ({
     id: e.id,
@@ -364,8 +426,12 @@ async function loadInventory(){
 
   categories = equipmentCategories.map(c => {
     const items = inventory.filter(i => i.cat === c.name);
-    return { name: c.name, have: items.reduce((s,i)=>s+i.have,0), total: items.reduce((s,i)=>s+i.total,0) };
-  }).filter(c => c.total > 0);
+    return {
+      name: c.name,
+      have: items.reduce((sum, item) => sum + (item.rawStatus === 'deactivated' ? 0 : item.have), 0),
+      total: items.reduce((sum, item) => sum + item.total, 0)
+    };
+  }).filter(category => inventory.some(item => item.cat === category.name));
 
   const filtersDiv = document.getElementById('invFilters');
   if(filtersDiv){
@@ -383,10 +449,15 @@ function mapEquipStatus(status, have, total){
 }
 
 async function loadCheckouts(){
-  let { data } = await supabaseClient
+  let { data, error } = await supabaseClient
     .from('checkouts')
-    .select('*, equipment:equipment(name, sku), request_item:borrow_request_items(request:borrow_requests(purpose, organization_name)), returnRequests:return_requests(id, status, quantity, requested_at, rejection_reason)')
+    .select('*, equipment:equipment(name, sku), request_item:borrow_request_items!request_item_id(borrow_date, expected_return_date, request:borrow_requests(purpose, organization_name, status)), returnRequests:return_requests(id, status, quantity, requested_at, rejection_reason)')
     .order('checked_out_at', { ascending: false });
+
+  if(error){
+    console.error('Error loading checkouts:', error);
+  }
+
   data = data || [];
   const today = new Date();
   today.setHours(0,0,0,0);
@@ -397,14 +468,18 @@ async function loadCheckouts(){
     const returnRequest = checkoutReturnRequests.sort((a, b) => new Date(b.requested_at) - new Date(a.requested_at))[0];
     const due = new Date(c.due_date); due.setHours(0,0,0,0);
     const overdue = c.status === 'checked_out' && due < today;
+    const recipient = request?.organization_name || c.user_team || '';
+    const requestPurpose = request?.purpose || '';
+
     return {
       id: c.id,
       ref: `C${String(idx+1).padStart(3,'0')}`,
       name: c.equipment?.name || 'Unknown item',
       athlete: c.user_name,
       team: c.user_team || '',
-      organizationName: request?.organization_name || c.user_team || '—',
-      purpose: request?.purpose || '—',
+      recipient,
+      organizationName: recipient || '—',
+      purpose: requestPurpose || '—',
       out: (c.checked_out_at || '').slice(0,10),
       due: c.due_date,
       qty: c.qty,
@@ -631,7 +706,7 @@ function renderDashCheckouts(){
 
 function updateDashStats(){
   const totalEquip = inventory.reduce((s,i)=>s+i.total, 0);
-  const availEquip = inventory.reduce((s,i)=>s+i.have, 0);
+  const availEquip = inventory.reduce((sum, item) => sum + (item.rawStatus === 'deactivated' ? 0 : item.have), 0);
   const statCards = document.querySelectorAll('.stat-card .stat-value');
   if(statCards[0]) statCards[0].textContent = totalEquip;
   if(statCards[1]) statCards[1].textContent = availEquip;
@@ -654,27 +729,42 @@ function updateDashStats(){
 }
 
 function renderInventory(){
-  const rows = invFilter==='ALL' ? inventory : inventory.filter(i=>i.cat===invFilter);
+  const filteredRows = invFilter==='ALL' ? inventory : inventory.filter(i=>i.cat===invFilter);
+  const rows = filteredRows.filter(item => item.rawStatus !== 'deactivated');
+  const deactivatedRows = filteredRows.filter(item => item.rawStatus === 'deactivated');
   const sub = document.getElementById('invSub');
-  if(sub) sub.textContent = `${inventory.length} items · Loaded from Supabase`;
+  const deactivatedTotal = inventory.filter(item => item.rawStatus === 'deactivated').length;
+  const syncLabel = inventoryLastSyncedAt ? `Last synced ${formatLocalDateTime(inventoryLastSyncedAt)}` : 'Loading inventory...';
+  if(sub) sub.textContent = `${inventory.length} items · ${deactivatedTotal} deactivated · ${syncLabel}`;
 
   const body = document.getElementById('invBody');
   if(!body) return;
-  if(!rows.length){ body.innerHTML = '<tr><td colspan="7" class="dim">No items found.</td></tr>'; return; }
-
   const isAdmin = currentProfile?.role === 'admin';
-  body.innerHTML = rows.map(i=>`
-    <tr>
+  body.innerHTML = renderInventoryRows(rows, isAdmin, 'No active equipment found.');
+
+  const deactivatedBody = document.getElementById('deactivatedInvBody');
+  const deactivatedSection = document.getElementById('deactivatedInventorySection');
+  if(deactivatedBody) deactivatedBody.innerHTML = renderInventoryRows(deactivatedRows, isAdmin, 'No deactivated equipment found.');
+  if(deactivatedSection) deactivatedSection.hidden = deactivatedRows.length === 0;
+  const deactivatedCount = document.getElementById('deactivatedInventoryCount');
+  if(deactivatedCount) deactivatedCount.textContent = `${deactivatedRows.length} item${deactivatedRows.length === 1 ? '' : 's'}`;
+}
+
+function renderInventoryRows(rows, isAdmin, emptyMessage){
+  if(!rows.length) return `<tr><td colspan="8" class="dim">${emptyMessage}</td></tr>`;
+  return rows.map(i=>`
+    <tr class="${i.rawStatus === 'deactivated' ? 'deactivated-row' : ''}">
       <td class="mono">${i.sku}</td>
       <td class="strong">${i.name}</td>
       <td class="dim">${i.cat}</td>
-      <td><strong>${i.have}</strong><span class="dim">/${i.total}</span></td>
+      <td><strong>${i.rawStatus === 'deactivated' ? 0 : i.have}</strong><span class="dim">/${i.total}</span></td>
       <td><span class="cond ${condClass(i.cond)}">${i.cond}</span></td>
       <td class="dim">${i.loc}</td>
       <td><span class="pill ${statusClass(i.status)}">${i.status}</span></td>
       <td>
         ${isAdmin ?
-          '<button type="button" class="inventory-edit-btn" data-action="edit-equipment" data-id="'+i.id+'">Edit</button>' :
+          '<button type="button" class="inventory-edit-btn" data-action="edit-equipment" data-id="'+i.id+'">Edit</button> ' +
+          '<button type="button" class="inventory-edit-btn" data-action="request-borrow" data-id="'+i.id+'" '+(i.have <= 0 || i.rawStatus === 'deactivated' ? 'disabled' : '')+'>Borrow</button>' :
           '<button type="button" class="inventory-edit-btn" data-action="request-borrow" data-id="'+i.id+'" '+(i.have <= 0 || i.rawStatus === 'deactivated' ? 'disabled' : '')+'>Borrow</button>'}
       </td>
     </tr>`).join('');
@@ -842,7 +932,7 @@ async function approveBorrowRequest(requestId, button){
           user_team: null,
           qty: item.qty,
           checked_out_at: new Date().toISOString(),
-          due_date: item.dueDate || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
+          due_date: item.dueDate || dateAfterDays(14),
           status: 'checked_out',
           processed_by: currentUser.id
         });
@@ -945,25 +1035,50 @@ function renderCheckouts(){
   const recordsSection = document.getElementById('checkoutRecordsSection');
   if(recordsSection) recordsSection.style.display = ['pending', 'rejected'].includes(checkoutFilter) ? 'none' : '';
   if(!body) return;
-  if(!filtered.length){ body.innerHTML = '<tr><td colspan="9" class="dim">No matching checkouts found.</td></tr>'; return; }
+
+  const tableThCount = body.closest('table')?.querySelectorAll('thead th')?.length || 0;
+  const colCount = tableThCount || 9;
+  const isGeartrackLayout = tableThCount >= 9;
+
+  if(!filtered.length){ body.innerHTML = `<tr><td colspan="${colCount}" class="dim">No matching checkouts found.</td></tr>`; return; }
 
   const isAdmin = currentProfile?.role === 'admin';
-  body.innerHTML = filtered.map(c=>`
-    <tr class="${c.returned?'done-row':''}">
-      <td class="mono">${c.ref}</td>
-      <td class="strong">${c.name}</td>
-      <td>${c.athlete}</td>
-      <td class="dim">${c.organizationName}</td>
-      <td>${c.purpose}</td>
-      <td class="mono dim">${c.out}</td>
-      <td class="mono ${c.overdue && !c.returned?'due-warn':'dim'}">${c.overdue && !c.returned?'⚠ ':''}${c.due}</td>
-      <td class="strong">${c.qty}</td>
-      <td>${c.returned ? '<span class="pill returned">✓ Returned</span>' :
-        (isAdmin ? `<button class="btn btn-orange" data-id="${c.id}" data-qty="${c.qty}">Mark Returned</button>` :
-          (c.returnStatus === 'pending'
-            ? '<span class="pill maintenance">Return Pending</span>'
-            : `<button class="btn btn-orange" data-return-checkout-id="${c.id}">${c.returnStatus === 'rejected' ? 'Return Again' : 'Return'}</button>`))}</td>
-    </tr>`).join('');
+  body.innerHTML = filtered.map(c=>{
+    const actionCell = c.returned
+      ? '<span class="pill returned">✓ Returned</span>'
+      : (isAdmin
+        ? `<button class="btn btn-orange" data-id="${c.id}" data-qty="${c.qty}">Mark Returned</button>`
+        : (c.returnStatus === 'pending'
+          ? '<span class="pill maintenance">Return Pending</span>'
+          : `<button class="btn btn-orange" data-return-checkout-id="${c.id}">${c.returnStatus === 'rejected' ? 'Return Again' : 'Return'}</button>`));
+
+    if(isGeartrackLayout){
+      return `
+        <tr class="${c.returned?'done-row':''}">
+          <td class="mono">${c.ref}</td>
+          <td class="strong">${c.name}</td>
+          <td>${c.athlete}</td>
+          <td class="dim">${c.recipient || c.organizationName || c.team || '-'}</td>
+          <td class="dim">${c.purpose || '-'}</td>
+          <td class="mono dim">${c.out}</td>
+          <td class="mono ${c.overdue && !c.returned?'due-warn':'dim'}">${c.overdue && !c.returned?'⚠ ':''}${c.due}</td>
+          <td class="strong">${c.qty}</td>
+          <td>${actionCell}</td>
+        </tr>`;
+    }
+
+    return `
+      <tr class="${c.returned?'done-row':''}">
+        <td class="mono">${c.ref}</td>
+        <td class="strong">${c.name}</td>
+        <td>${c.athlete}</td>
+        <td class="dim">${c.team||'-'}</td>
+        <td class="mono dim">${c.out}</td>
+        <td class="mono ${c.overdue && !c.returned?'due-warn':'dim'}">${c.overdue && !c.returned?'⚠ ':''}${c.due}</td>
+        <td class="strong">${c.qty}</td>
+        <td>${actionCell}</td>
+      </tr>`;
+  }).join('');
 
   document.querySelectorAll('#coBody button[data-id]').forEach(b=>{
     b.addEventListener('click', (ev)=>markReturned(b.dataset.id, Number(b.dataset.qty), ev));
@@ -1149,6 +1264,7 @@ function openEquipmentModal(equipmentId){
   document.getElementById('editEquipmentCondition').value = item.cond;
   document.getElementById('editEquipmentLocation').value = item.loc;
   document.getElementById('editEquipmentStatus').value = item.rawStatus || 'available';
+  document.getElementById('deactivateEquipmentBtn').textContent = item.rawStatus === 'deactivated' ? 'Activate' : 'Deactivate';
 
   document.getElementById('adminEditModal').classList.remove('hidden');
   document.getElementById('adminEditModal').setAttribute('aria-hidden', 'false');
@@ -1158,6 +1274,128 @@ function closeEquipmentModal(){
   document.getElementById('adminEditModal').classList.add('hidden');
   document.getElementById('adminEditModal').setAttribute('aria-hidden', 'true');
   currentEditEquipmentId = null;
+}
+
+function openAddEquipmentModal(){
+  if(currentProfile?.role !== 'admin') return;
+
+  const categorySelect = document.getElementById('addEquipmentCategory');
+  categorySelect.innerHTML = equipmentCategories.map(category =>
+    `<option value="${category.id}">${category.name}</option>`
+  ).join('');
+  updateGeneratedEquipmentSku();
+
+  const modal = document.getElementById('addEquipmentModal');
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeAddEquipmentModal(){
+  const modal = document.getElementById('addEquipmentModal');
+  if(modal){
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  document.getElementById('addEquipmentForm')?.reset();
+  const submit = document.querySelector('#addEquipmentForm button[type="submit"]');
+  if(submit){ submit.disabled = false; submit.textContent = 'Add Equipment'; }
+}
+
+function updateGeneratedEquipmentSku(){
+  const form = document.getElementById('addEquipmentForm');
+  const selectedCategory = equipmentCategories.find(category => category.id === form?.category.value);
+  const skuInput = document.getElementById('addEquipmentSku');
+  if(!selectedCategory || !skuInput) return;
+
+  const categoryPrefixes = {
+    'Ball Games': 'BG',
+    'Racket Sports': 'RS',
+    'Combative Sports': 'CS',
+    'Athletics': 'AT',
+    'Aquatic Sports': 'AQ'
+  };
+  const prefix = categoryPrefixes[selectedCategory.name] || selectedCategory.name
+    .split(/\s+/)
+    .map(word => word[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+  const highestNumber = inventory.reduce((highest, item) => {
+    if(!item.sku.startsWith(`${prefix}-`)) return highest;
+    const number = Number(item.sku.slice(prefix.length + 1));
+    return Number.isInteger(number) ? Math.max(highest, number) : highest;
+  }, 0);
+
+  skuInput.value = `${prefix}-${String(highestNumber + 1).padStart(4, '0')}`;
+}
+
+async function removeEquipmentFromInventory(){
+  if(currentProfile?.role !== 'admin' || !currentEditEquipmentId) return;
+  const item = inventory.find(equipment => equipment.id === currentEditEquipmentId);
+  if(!item) return;
+  if(!window.confirm(`Remove ${item.name} from active inventory? Checkout history will be kept.`)) return;
+
+  const removeButton = document.getElementById('deleteEquipmentBtn');
+  const restoreButton = setButtonProcessing(removeButton, 'REMOVING...');
+  const { data: activeCheckouts, error: checkoutError } = await supabaseClient
+    .from('checkouts')
+    .select('qty')
+    .eq('equipment_id', currentEditEquipmentId)
+    .eq('status', 'checked_out');
+
+  if(checkoutError){
+    console.error(checkoutError);
+    restoreButton();
+    showNotice('Equipment could not be removed. Checkout history could not be checked.', 'error');
+    return;
+  }
+
+  const outstandingQty = (activeCheckouts || []).reduce((total, checkout) => total + Number(checkout.qty || 0), 0);
+  const { error } = await supabaseClient.from('equipment').update({
+    available_qty: 0,
+    maintenance_qty: 0,
+    total_qty: outstandingQty,
+    status: 'deactivated'
+  }).eq('id', currentEditEquipmentId);
+
+  if(error){
+    console.error(error);
+    restoreButton();
+    showNotice('Equipment could not be removed. No changes were saved.', 'error');
+    return;
+  }
+
+  closeEquipmentModal();
+  await loadAllData();
+  showNotice('Equipment removed from active inventory. Checkout history was preserved.', 'success');
+}
+
+async function toggleEquipmentActivation(){
+  if(currentProfile?.role !== 'admin' || !currentEditEquipmentId) return;
+  const item = inventory.find(equipment => equipment.id === currentEditEquipmentId);
+  if(!item) return;
+  const activating = item.rawStatus === 'deactivated';
+  if(activating && item.total <= 0){
+    showNotice('Add stock before activating this equipment.', 'warning');
+    return;
+  }
+
+  const button = document.getElementById('deactivateEquipmentBtn');
+  const restoreButton = setButtonProcessing(button, activating ? 'ACTIVATING...' : 'DEACTIVATING...');
+  const { error } = await supabaseClient.from('equipment')
+    .update({ status: activating ? 'available' : 'deactivated' })
+    .eq('id', currentEditEquipmentId);
+
+  if(error){
+    console.error(error);
+    restoreButton();
+    showNotice('Equipment could not be deactivated. No changes were saved.', 'error');
+    return;
+  }
+
+  closeEquipmentModal();
+  await loadAllData();
+  showNotice(activating ? 'Equipment activated successfully.' : 'Equipment deactivated successfully.', 'success');
 }
 
 document.addEventListener('click', e => {
@@ -1175,6 +1413,10 @@ document.addEventListener('click', e => {
 
   if(e.target.matches('[data-close="true"]') || e.target.id === 'closeEditModal' || e.target.id === 'cancelEditModal'){
     closeEquipmentModal();
+  }
+
+  if(e.target.matches('[data-close-add="true"]') || e.target.id === 'closeAddEquipmentModal' || e.target.id === 'cancelAddEquipmentModal'){
+    closeAddEquipmentModal();
   }
 
   if(e.target.matches('[data-close-borrow="true"]') || e.target.id === 'closeBorrowModal' || e.target.id === 'cancelBorrowModal'){
@@ -1207,8 +1449,8 @@ function openBorrowModal(equipmentId){
 
   selectedBorrowEquipment = item;
   const form = document.getElementById('borrowForm');
-  const today = new Date().toISOString().slice(0, 10);
-  const maxDate = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+  const today = formatLocalDateInput(new Date());
+  const maxDate = dateAfterDays(14);
 
   document.getElementById('borrowEquipmentName').value = `${item.name} (${item.have} available)`;
   document.getElementById('borrowQty').value = '1';
@@ -1497,79 +1739,74 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
 
   const restoreSubmit = setButtonProcessing(submit, 'SUBMITTING...');
 
-  const { error: reserveError } = await supabaseClient.rpc('reserve_equipment_qty', {
+  const { error } = await supabaseClient.rpc('create_self_checkout', {
     equipment_uuid: selectedBorrowEquipment.id,
-    qty_requested: qty
+    qty,
+    borrow_date: startDate,
+    due_date: endDate,
+    organization_name: organizationName,
+    purpose
   });
 
-  if(reserveError){
-    console.error('Reserve stock failed:', reserveError);
+  if(error){
+    console.error(error);
     restoreSubmit();
-    const message = /maintenance/i.test(reserveError.message || '')
+    const message = /maintenance/i.test(error.message || '')
       ? 'Checkout failed. This equipment is currently under maintenance.'
-      : /insufficient stock/i.test(reserveError.message || '')
+      : /insufficient stock/i.test(error.message || '')
         ? 'Checkout failed. The requested quantity is no longer available.'
-        : 'Checkout failed. The equipment may no longer be available.';
+        : (error.message || 'Borrow failed.');
     showNotice(message, 'error');
     return;
   }
 
-  const { data: requestData, error: requestError } = await supabaseClient
-    .from('borrow_requests')
-    .insert({
-      user_id: currentUser.id,
-      purpose,
-      organization_name: organizationName,
-      status: 'pending'
-    })
-    .select()
-    .single();
-
-  if(requestError){
-    console.error(requestError);
-    await supabaseClient.rpc('increment_equipment_qty', {
-      equipment_uuid: selectedBorrowEquipment.id,
-      qty_increment: qty
-    });
-
-    const msg = requestError.message || 'Failed to submit the borrow request.';
-    const missingTable = /does not exist|relation .*borrow_requests|column .*organization_name/i.test(msg);
-    restoreSubmit();
-    showNotice(
-      missingTable
-        ? 'Borrow request storage is not ready in Supabase yet. Please run the project SQL migration so the borrow_requests table and organization_name column exist before submitting requests.'
-        : 'Request submission failed. No changes were saved.',
-      'error'
-    );
-    return;
-  }
-
-  const { error: itemError } = await supabaseClient.from('borrow_request_items').insert({
-    request_id: requestData.id,
-    equipment_id: selectedBorrowEquipment.id,
-    qty,
-    borrow_date: startDate,
-    expected_return_date: endDate
-  });
-
-  if(itemError){
-    console.error(itemError);
-
-    await supabaseClient.rpc('increment_equipment_qty', {
-      equipment_uuid: selectedBorrowEquipment.id,
-      qty_increment: qty
-    });
-
-    await supabaseClient.from('borrow_requests').delete().eq('id', requestData.id);
-
-    restoreSubmit();
-    showNotice('Request submission failed. No changes were saved.', 'error');
-    return;
-  }
-
+  restoreSubmit();
   closeBorrowModal();
   await loadAllData();
-  showNotice('Request submitted successfully.', 'success');
+  showNotice('Checkout created successfully.', 'success');
+});
+
+document.getElementById('addEquipmentBtn')?.addEventListener('click', openAddEquipmentModal);
+document.getElementById('deleteEquipmentBtn')?.addEventListener('click', removeEquipmentFromInventory);
+document.getElementById('deactivateEquipmentBtn')?.addEventListener('click', toggleEquipmentActivation);
+document.getElementById('addEquipmentCategory')?.addEventListener('change', updateGeneratedEquipmentSku);
+
+document.getElementById('addEquipmentForm')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  if(currentProfile?.role !== 'admin') return;
+
+  const form = event.currentTarget;
+  const totalQty = Number(form.total.value);
+  const availableQty = Number(form.available.value);
+  const submit = form.querySelector('button[type="submit"]');
+
+  if(!Number.isInteger(totalQty) || totalQty < 1 || !Number.isInteger(availableQty) || availableQty < 0 || availableQty > totalQty){
+    showNotice('Available stock must be a whole number between zero and total stock.', 'error');
+    return;
+  }
+
+  const restoreSubmit = setButtonProcessing(submit, 'ADDING...');
+  const { error } = await supabaseClient.from('equipment').insert({
+    sku: form.sku.value.trim(),
+    name: form.elements.namedItem('name').value.trim(),
+    category_id: form.category.value,
+    available_qty: availableQty,
+    total_qty: totalQty,
+    condition: form.condition.value,
+    location: form.location.value.trim(),
+    status: form.status.value
+  });
+
+  if(error){
+    console.error(error);
+    restoreSubmit();
+    showNotice(error.code === '23505' ? 'That SKU is already in use. Enter a unique SKU.' : 'Equipment could not be added. No changes were saved.', 'error');
+    return;
+  }
+
+  closeAddEquipmentModal();
+  await loadAllData();
+  showNotice('Equipment added successfully.', 'success');
 });
 
 document.getElementById('adminEditForm').addEventListener('submit', async (event) => {

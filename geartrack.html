@@ -73,6 +73,9 @@
     <button data-view="procurement">PROCUREMENT <span class="count" id="poCount">0</span></button>
   </nav>
   <div class="topbar-right">
+    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch to light mode" title="Switch to light mode">
+      <span aria-hidden="true">☼</span>
+    </button>
     <div class="overdue-pill" id="overduePill">0 OVERDUE</div>
     <div class="notification-wrap">
       <button type="button" class="notification-btn" id="notificationButton" aria-label="Notifications" aria-expanded="false">
@@ -98,7 +101,7 @@
   <section class="view active" id="view-dashboard">
     <div class="page-head">
       <h1 class="glitch">Equipment Overview</h1>
-      <div class="page-sub">Season 2026 · Athletic Department</div>
+      <div class="page-sub" id="currentPeriod">Current month · Athletic Department</div>
     </div>
 
     <div class="stat-grid">
@@ -141,7 +144,7 @@
     <div class="head-row">
       <div>
         <h1 class="glitch">Inventory</h1>
-        <div class="page-sub" id="invSub">12 items · Last synced 2026-09-19</div>
+        <div class="page-sub" id="invSub">Loading inventory...</div>
       </div>
       <div class="chip-row" id="invFilters">
         <button class="chip active" data-cat="ALL">ALL</button>
@@ -150,6 +153,9 @@
         <button class="chip" data-cat="Combative Sports">COMBATIVE SPORTS</button>
         <button class="chip" data-cat="Athletics">ATHLETICS</button>
         <button class="chip" data-cat="Aquatic Sports">AQUATIC SPORTS</button>
+      </div>
+      <div class="inventory-actions" id="inventoryActions" style="display:none;">
+        <button type="button" class="btn btn-orange" id="addEquipmentBtn">Add Equipment</button>
       </div>
     </div>
     <div class="table-wrap">
@@ -162,6 +168,25 @@
         <tbody id="invBody"></tbody>
       </table>
     </div>
+    <section class="deactivated-inventory" id="deactivatedInventorySection" hidden>
+      <div class="inventory-section-head">
+        <div>
+          <h2>Deactivated Equipment</h2>
+          <p>Unavailable for borrowing</p>
+        </div>
+        <span class="deactivated-count" id="deactivatedInventoryCount">0 items</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>Equipment</th><th>Category</th><th>Stock</th><th>Condition</th><th>Location</th><th>Status</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="deactivatedInvBody"></tbody>
+        </table>
+      </div>
+    </section>
   </section>
 
   <!-- CHECKOUTS -->
@@ -313,8 +338,81 @@
       </div>
 
       <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="deactivateEquipmentBtn">Deactivate</button>
+        <button type="button" class="btn btn-danger" id="deleteEquipmentBtn">Remove from Inventory</button>
         <button type="button" class="btn btn-secondary" id="cancelEditModal">Cancel</button>
         <button type="submit" class="btn btn-orange">Save Changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="addEquipmentModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close-add="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="addEquipmentTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Admin Tools</div>
+        <h3 id="addEquipmentTitle">Add Equipment</h3>
+      </div>
+      <button type="button" class="modal-close" id="closeAddEquipmentModal" aria-label="Close add equipment modal">×</button>
+    </div>
+
+    <form id="addEquipmentForm">
+      <div class="form-grid">
+        <div class="form-field modal-field">
+          <label for="addEquipmentSku">Generated SKU</label>
+          <input id="addEquipmentSku" name="sku" type="text" readonly required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="addEquipmentName">Equipment</label>
+          <input id="addEquipmentName" name="name" type="text" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="addEquipmentCategory">Category</label>
+          <select id="addEquipmentCategory" name="category" required></select>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="addEquipmentTotal">Total Stock</label>
+          <input id="addEquipmentTotal" name="total" type="number" min="1" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="addEquipmentAvailable">Available Stock</label>
+          <input id="addEquipmentAvailable" name="available" type="number" min="0" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="addEquipmentCondition">Condition</label>
+          <select id="addEquipmentCondition" name="condition" required>
+            <option value="Excellent">Excellent</option>
+            <option value="Good">Good</option>
+            <option value="Fair">Fair</option>
+            <option value="Poor">Poor</option>
+          </select>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="addEquipmentLocation">Location</label>
+          <input id="addEquipmentLocation" name="location" type="text" required>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="addEquipmentStatus">Status</label>
+          <select id="addEquipmentStatus" name="status" required>
+            <option value="available">Available</option>
+            <option value="maintenance">Maintenance</option>
+            <option value="deactivated">Deactivated</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="cancelAddEquipmentModal">Cancel</button>
+        <button type="submit" class="btn btn-orange">Add Equipment</button>
       </div>
     </form>
   </div>
@@ -325,8 +423,8 @@
   <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="borrowEquipmentTitle">
     <div class="modal-header">
       <div>
-        <div class="modal-kicker">Borrow Request</div>
-        <h3 id="borrowEquipmentTitle">Request Equipment</h3>
+        <div class="modal-kicker">Borrow</div>
+        <h3 id="borrowEquipmentTitle">Borrow Equipment (Auto-Approved)</h3>
       </div>
       <button type="button" class="modal-close" id="closeBorrowModal" aria-label="Close borrow modal">×</button>
     </div>
@@ -366,7 +464,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn btn-secondary" id="cancelBorrowModal">Cancel</button>
-        <button type="submit" class="btn btn-orange">Submit Request</button>
+        <button type="submit" class="btn btn-orange">Borrow (Auto-Approved)</button>
       </div>
     </form>
   </div>

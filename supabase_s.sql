@@ -396,7 +396,7 @@ CREATE POLICY categories_all ON equipment_categories FOR ALL
 -- RLS: equipment — all authenticated users can read; admins CRUD
 -- ===============================
 CREATE POLICY equipment_select ON equipment FOR SELECT
-  USING (auth.uid() IS NOT NULL AND (status != 'deactivated' OR is_admin()));
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY equipment_all ON equipment FOR ALL
   USING (is_admin())
@@ -835,6 +835,7 @@ GRANT EXECUTE ON FUNCTION finish_equipment_maintenance(UUID, INTEGER, INTEGER) T
 CREATE OR REPLACE FUNCTION increment_equipment_qty(equipment_uuid UUID, qty_increment INTEGER)
 RETURNS VOID
 LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
 AS $increment_equipment_qty$
 BEGIN
   UPDATE equipment
@@ -851,6 +852,92 @@ END;
 $increment_equipment_qty$;
 
 GRANT EXECUTE ON FUNCTION increment_equipment_qty(UUID, INTEGER) TO authenticated;
+
+CREATE OR REPLACE FUNCTION create_self_checkout(
+  equipment_uuid UUID,
+  qty INTEGER,
+  borrow_date DATE,
+  due_date DATE,
+  organization_name TEXT,
+  purpose TEXT
+)
+RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $create_self_checkout$
+DECLARE
+  v_uid UUID;
+  v_request_id UUID;
+  v_request_item_id UUID;
+  v_checkout_id UUID;
+  v_user_name TEXT;
+BEGIN
+  v_uid := auth.uid();
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF qty IS NULL OR qty <= 0 THEN
+    RAISE EXCEPTION 'Quantity must be > 0' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF borrow_date IS NULL OR due_date IS NULL OR due_date < borrow_date THEN
+    RAISE EXCEPTION 'Invalid borrow/due dates' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT COALESCE(full_name, email) INTO v_user_name
+  FROM public.profiles
+  WHERE id = v_uid;
+
+  IF v_user_name IS NULL THEN
+    RAISE EXCEPTION 'Profile not found for current user' USING ERRCODE = 'P0001';
+  END IF;
+
+  -- Reserve stock atomically (will raise if unavailable/deactivated/maintenance)
+  PERFORM public.reserve_equipment_qty(equipment_uuid, qty);
+
+  -- Auto-approved borrow request
+  INSERT INTO public.borrow_requests (user_id, purpose, organization_name, status, reviewed_by, reviewed_at)
+  VALUES (v_uid, purpose, organization_name, 'approved', NULL, NOW())
+  RETURNING id INTO v_request_id;
+
+  INSERT INTO public.borrow_request_items (request_id, equipment_id, qty, borrow_date, expected_return_date)
+  VALUES (v_request_id, equipment_uuid, qty, borrow_date, due_date)
+  RETURNING id INTO v_request_item_id;
+
+  INSERT INTO public.checkouts (
+    request_item_id,
+    equipment_id,
+    user_id,
+    user_name,
+    user_team,
+    qty,
+    checked_out_at,
+    due_date,
+    status,
+    processed_by,
+    returned_by
+  )
+  VALUES (
+    v_request_item_id,
+    equipment_uuid,
+    v_uid,
+    v_user_name,
+    organization_name,
+    qty,
+    NOW(),
+    due_date,
+    'checked_out',
+    NULL,
+    NULL
+  )
+  RETURNING id INTO v_checkout_id;
+
+  RETURN v_checkout_id;
+END;
+$create_self_checkout$;
+
+GRANT EXECUTE ON FUNCTION create_self_checkout(UUID, INTEGER, DATE, DATE, TEXT, TEXT) TO authenticated;
 
 -- =====================================================
 -- CHECKOUT DEMO DATA
