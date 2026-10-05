@@ -1467,6 +1467,14 @@ function openBorrowModal(equipmentId){
   document.getElementById('borrowStartDate').value = today;
   document.getElementById('borrowEndDate').value = maxDate;
 
+  const isAdmin = currentProfile?.role === 'admin';
+  document.getElementById('borrowEquipmentTitle').textContent = isAdmin
+    ? 'Borrow Equipment (Auto-Approved)'
+    : 'Request Equipment';
+  document.querySelector('#borrowForm button[type="submit"]').textContent = isAdmin
+    ? 'Borrow (Auto-Approved)'
+    : 'Submit Request';
+
   document.getElementById('borrowModal').classList.remove('hidden');
   document.getElementById('borrowModal').setAttribute('aria-hidden', 'false');
 }
@@ -1739,7 +1747,8 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
 
   const restoreSubmit = setButtonProcessing(submit, 'SUBMITTING...');
 
-  const { error } = await supabaseClient.rpc('create_self_checkout', {
+  const isAdmin = currentProfile?.role === 'admin';
+  const { error } = await supabaseClient.rpc(isAdmin ? 'create_self_checkout' : 'create_borrow_request', {
     equipment_uuid: selectedBorrowEquipment.id,
     qty,
     borrow_date: startDate,
@@ -1752,10 +1761,10 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
     console.error(error);
     restoreSubmit();
     const message = /maintenance/i.test(error.message || '')
-      ? 'Checkout failed. This equipment is currently under maintenance.'
+      ? 'Request failed. This equipment is currently under maintenance.'
       : /insufficient stock/i.test(error.message || '')
-        ? 'Checkout failed. The requested quantity is no longer available.'
-        : (error.message || 'Borrow failed.');
+        ? 'Request failed. The requested quantity is no longer available.'
+        : (error.message || 'Borrow request failed.');
     showNotice(message, 'error');
     return;
   }
@@ -1763,7 +1772,7 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
   restoreSubmit();
   closeBorrowModal();
   await loadAllData();
-  showNotice('Checkout created successfully.', 'success');
+  showNotice(isAdmin ? 'Checkout created successfully.' : 'Borrow request submitted for admin approval.', 'success');
 });
 
 document.getElementById('addEquipmentBtn')?.addEventListener('click', openAddEquipmentModal);

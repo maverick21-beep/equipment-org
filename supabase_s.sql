@@ -871,6 +871,7 @@ DECLARE
   v_request_item_id UUID;
   v_checkout_id UUID;
   v_user_name TEXT;
+  v_user_role TEXT;
 BEGIN
   v_uid := auth.uid();
   IF v_uid IS NULL THEN
@@ -885,12 +886,16 @@ BEGIN
     RAISE EXCEPTION 'Invalid borrow/due dates' USING ERRCODE = 'P0001';
   END IF;
 
-  SELECT COALESCE(full_name, email) INTO v_user_name
+  SELECT COALESCE(full_name, email), role INTO v_user_name, v_user_role
   FROM public.profiles
   WHERE id = v_uid;
 
   IF v_user_name IS NULL THEN
     RAISE EXCEPTION 'Profile not found for current user' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_user_role <> 'admin' THEN
+    RAISE EXCEPTION 'Only admins can create auto-approved checkouts' USING ERRCODE = 'P0001';
   END IF;
 
   -- Reserve stock atomically (will raise if unavailable/deactivated/maintenance)
@@ -938,6 +943,59 @@ END;
 $create_self_checkout$;
 
 GRANT EXECUTE ON FUNCTION create_self_checkout(UUID, INTEGER, DATE, DATE, TEXT, TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION create_borrow_request(
+  equipment_uuid UUID,
+  qty INTEGER,
+  borrow_date DATE,
+  due_date DATE,
+  organization_name TEXT,
+  purpose TEXT
+)
+RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $create_borrow_request$
+DECLARE
+  v_uid UUID;
+  v_user_role TEXT;
+  v_request_id UUID;
+BEGIN
+  v_uid := auth.uid();
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF qty IS NULL OR qty <= 0 THEN
+    RAISE EXCEPTION 'Quantity must be > 0' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF borrow_date IS NULL OR due_date IS NULL OR due_date < borrow_date THEN
+    RAISE EXCEPTION 'Invalid borrow/due dates' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT role INTO v_user_role
+  FROM public.profiles
+  WHERE id = v_uid;
+
+  IF v_user_role IS NULL OR v_user_role <> 'user' THEN
+    RAISE EXCEPTION 'Only users can create borrow requests' USING ERRCODE = 'P0001';
+  END IF;
+
+  PERFORM public.reserve_equipment_qty(equipment_uuid, qty);
+
+  INSERT INTO public.borrow_requests (user_id, purpose, organization_name, status)
+  VALUES (v_uid, purpose, organization_name, 'pending')
+  RETURNING id INTO v_request_id;
+
+  INSERT INTO public.borrow_request_items (request_id, equipment_id, qty, borrow_date, expected_return_date)
+  VALUES (v_request_id, equipment_uuid, qty, borrow_date, due_date);
+
+  RETURN v_request_id;
+END;
+$create_borrow_request$;
+
+GRANT EXECUTE ON FUNCTION create_borrow_request(UUID, INTEGER, DATE, DATE, TEXT, TEXT) TO authenticated;
 
 -- =====================================================
 -- CHECKOUT DEMO DATA
