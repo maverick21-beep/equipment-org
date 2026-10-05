@@ -64,15 +64,19 @@
     <div class="brand-icon"><span></span><span></span><span></span><span></span></div>
     <div class="brand-name">GEARTRACK</div>
     <div class="admin-tag" id="roleTag">USER</div>
+    <button type="button" class="sidebar-toggle" id="sidebarToggle" aria-controls="tabs" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
+      <span aria-hidden="true">«</span>
+    </button>
   </div>
   <nav class="tabs" id="tabs">
-    <button data-view="dashboard" class="active">DASHBOARD</button>
-    <button data-view="inventory">INVENTORY</button>
-    <button data-view="checkouts">CHECKOUTS</button>
-    <button data-view="maintenance">MAINTENANCE</button>
-    <button data-view="procurement">PROCUREMENT <span class="count" id="poCount">0</span></button>
+    <button data-view="dashboard" class="active" title="Dashboard">DASHBOARD</button>
+    <button data-view="inventory" title="Inventory">INVENTORY</button>
+    <button data-view="checkouts" title="Checkouts">CHECKOUTS</button>
+    <button data-view="maintenance" title="Maintenance">MAINTENANCE</button>
+    <button data-view="procurement" title="Procurement">PROCUREMENT <span class="count" id="poCount">0</span></button>
   </nav>
   <div class="topbar-right">
+    <div class="avatar" id="userAvatar">U</div>
     <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch to light mode" title="Switch to light mode">
       <span aria-hidden="true">☼</span>
     </button>
@@ -90,7 +94,6 @@
         <div class="notification-list" id="notificationList"></div>
       </div>
     </div>
-    <div class="avatar" id="userAvatar">U</div>
     <button class="logout-btn" id="logoutBtn">Logout</button>
   </div>
 </header>

@@ -31,6 +31,7 @@ let notifications = [];
 let notificationChannel = null;
 let inventoryLastSyncedAt = null;
 const THEME_STORAGE_KEY = 'geartrack-theme';
+const SIDEBAR_STORAGE_KEY = 'geartrack-sidebar-collapsed';
 
 function formatLocalDateInput(date){
   const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
@@ -85,6 +86,38 @@ document.getElementById('themeToggle')?.addEventListener('click', () => {
     localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
   } catch(error){
     console.warn('Theme preference could not be saved:', error);
+  }
+});
+
+function applySidebarState(collapsed){
+  const isCollapsed = Boolean(collapsed);
+  document.documentElement.dataset.sidebar = isCollapsed ? 'collapsed' : 'expanded';
+
+  const toggle = document.getElementById('sidebarToggle');
+  if(toggle){
+    const action = isCollapsed ? 'Expand' : 'Collapse';
+    toggle.setAttribute('aria-label', `${action} sidebar`);
+    toggle.setAttribute('aria-expanded', String(!isCollapsed));
+    toggle.title = `${action} sidebar`;
+    toggle.innerHTML = `<span aria-hidden="true">${isCollapsed ? '»' : '«'}</span>`;
+  }
+}
+
+let sidebarCollapsed = false;
+try {
+  sidebarCollapsed = localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true';
+} catch(error){
+  console.warn('Sidebar preference could not be loaded:', error);
+}
+applySidebarState(sidebarCollapsed);
+
+document.getElementById('sidebarToggle')?.addEventListener('click', () => {
+  sidebarCollapsed = document.documentElement.dataset.sidebar !== 'collapsed';
+  applySidebarState(sidebarCollapsed);
+  try {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarCollapsed));
+  } catch(error){
+    console.warn('Sidebar preference could not be saved:', error);
   }
 });
 
@@ -186,13 +219,26 @@ async function startNotificationUpdates(){
     });
 }
 
+function positionNotificationPanel(button){
+  const top = button.getBoundingClientRect().top;
+  document.documentElement.style.setProperty('--notification-anchor-top', `${top}px`);
+}
+
 document.getElementById('notificationButton')?.addEventListener('click', event => {
   event.stopPropagation();
   const panel = document.getElementById('notificationPanel');
   const button = event.currentTarget;
+  positionNotificationPanel(button);
   const open = panel?.classList.toggle('hidden') === false;
   button.setAttribute('aria-expanded', String(open));
   panel?.setAttribute('aria-hidden', String(!open));
+});
+
+window.addEventListener('resize', () => {
+  const panel = document.getElementById('notificationPanel');
+  if(!panel?.classList.contains('hidden')){
+    positionNotificationPanel(document.getElementById('notificationButton'));
+  }
 });
 
 document.getElementById('notificationList')?.addEventListener('click', async event => {
