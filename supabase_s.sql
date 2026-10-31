@@ -195,18 +195,33 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   po_number TEXT UNIQUE NOT NULL,
   equipment_id UUID REFERENCES equipment(id) ON DELETE SET NULL,
+  category_id UUID REFERENCES equipment_categories(id) ON DELETE SET NULL,
   equipment_description TEXT,
   qty INTEGER NOT NULL CHECK (qty > 0),
   unit_cost NUMERIC(10,2) NOT NULL,
   total_cost NUMERIC(10,2) GENERATED ALWAYS AS (qty * unit_cost) STORED,
   order_date DATE NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending_approval'
-    CHECK (status IN ('pending_approval', 'approved', 'ordered', 'shipped', 'received', 'cancelled')),
+    CHECK (status IN ('pending_approval', 'approved', 'ordered', 'shipped', 'waiting_for_arrival', 'received', 'in_use', 'cancelled')),
+  location TEXT,
+  event TEXT,
   notes TEXT,
   created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   received_at TIMESTAMPTZ
 );
+
+ALTER TABLE purchase_orders
+  ADD COLUMN IF NOT EXISTS category_id UUID REFERENCES equipment_categories(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS location TEXT,
+  ADD COLUMN IF NOT EXISTS event TEXT;
+
+ALTER TABLE purchase_orders
+  DROP CONSTRAINT IF EXISTS purchase_orders_status_check;
+
+ALTER TABLE purchase_orders
+  ADD CONSTRAINT purchase_orders_status_check
+  CHECK (status IN ('pending_approval', 'approved', 'ordered', 'shipped', 'waiting_for_arrival', 'received', 'in_use', 'cancelled'));
 
 -- =====================================================
 -- TABLE 10: activity_logs
@@ -999,6 +1014,98 @@ END;
 $create_borrow_request$;
 
 GRANT EXECUTE ON FUNCTION create_borrow_request(UUID, INTEGER, DATE, DATE, TEXT, TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION approve_borrow_request(request_uuid UUID)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $approve_borrow_request$
+DECLARE
+  request_row borrow_requests%ROWTYPE;
+  item_row borrow_request_items%ROWTYPE;
+  equipment_row equipment%ROWTYPE;
+  borrower_name TEXT;
+BEGIN
+  IF NOT is_admin() THEN
+    RAISE EXCEPTION 'Only administrators can approve borrow requests';
+  END IF;
+
+  SELECT * INTO request_row
+  FROM borrow_requests
+  WHERE id = request_uuid
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Borrow request not found';
+  END IF;
+
+  IF request_row.status <> 'pending' THEN
+    RAISE EXCEPTION 'Borrow request is no longer pending';
+  END IF;
+
+  SELECT COALESCE(full_name, email, 'A user') INTO borrower_name
+  FROM profiles
+  WHERE id = request_row.user_id;
+
+  FOR item_row IN
+    SELECT *
+    FROM borrow_request_items
+    WHERE request_id = request_uuid
+  LOOP
+    SELECT * INTO equipment_row
+    FROM equipment
+    WHERE id = item_row.equipment_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'One of the requested items could not be found';
+    END IF;
+
+    IF equipment_row.status = 'maintenance' THEN
+      RAISE EXCEPTION 'Equipment is currently under maintenance';
+    END IF;
+
+    IF equipment_row.status = 'deactivated' THEN
+      RAISE EXCEPTION 'Equipment is no longer available';
+    END IF;
+
+    INSERT INTO checkouts (
+      request_item_id,
+      equipment_id,
+      user_id,
+      user_name,
+      user_team,
+      qty,
+      checked_out_at,
+      due_date,
+      status,
+      processed_by,
+      returned_by
+    ) VALUES (
+      item_row.id,
+      item_row.equipment_id,
+      request_row.user_id,
+      borrower_name,
+      request_row.organization_name,
+      item_row.qty,
+      NOW(),
+      item_row.expected_return_date,
+      'checked_out',
+      auth.uid(),
+      NULL
+    );
+  END LOOP;
+
+  UPDATE borrow_requests
+  SET status = 'approved',
+      reviewed_by = auth.uid(),
+      reviewed_at = NOW()
+  WHERE id = request_uuid;
+END;
+$approve_borrow_request$;
+
+GRANT EXECUTE ON FUNCTION approve_borrow_request(UUID) TO authenticated;
 
 -- =====================================================
 -- CHECKOUT DEMO DATA
