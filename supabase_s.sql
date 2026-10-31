@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS equipment (
   sku TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
   category_id UUID REFERENCES equipment_categories(id) ON DELETE SET NULL,
+  event TEXT,
   available_qty INTEGER NOT NULL CHECK (available_qty >= 0),
   maintenance_qty INTEGER NOT NULL DEFAULT 0 CHECK (maintenance_qty >= 0),
   total_qty INTEGER NOT NULL CHECK (total_qty >= 0),
@@ -66,6 +67,8 @@ CREATE TABLE IF NOT EXISTS equipment (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE equipment ADD COLUMN IF NOT EXISTS event TEXT;
 
 -- Trigger to auto-update updated_at
 CREATE OR REPLACE FUNCTION trigger_set_timestamp()
