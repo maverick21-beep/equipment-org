@@ -162,7 +162,7 @@
       <table>
         <thead>
           <tr>
-            <th>ID</th><th>Equipment</th><th>Category</th><th>Stock</th><th>Condition</th><th>Location</th><th>Status</th><th>Action</th>
+            <th>ID</th><th>Equipment</th><th>Category</th><th>Event</th><th>Stock</th><th>Condition</th><th>Location</th><th>Status</th><th>Action</th>
           </tr>
         </thead>
         <tbody id="invBody"></tbody>
@@ -180,7 +180,7 @@
         <table>
           <thead>
             <tr>
-              <th>ID</th><th>Equipment</th><th>Category</th><th>Stock</th><th>Condition</th><th>Location</th><th>Status</th><th>Action</th>
+              <th>ID</th><th>Equipment</th><th>Category</th><th>Event</th><th>Stock</th><th>Condition</th><th>Location</th><th>Status</th><th>Action</th>
             </tr>
           </thead>
           <tbody id="deactivatedInvBody"></tbody>
@@ -303,6 +303,11 @@
         </div>
 
         <div class="form-field modal-field">
+          <label for="editEquipmentEvent">Event</label>
+          <input id="editEquipmentEvent" name="event" type="text" placeholder="e.g. Boxing" required>
+        </div>
+
+        <div class="form-field modal-field">
           <label for="editEquipmentAvailable">Available Stock</label>
           <input id="editEquipmentAvailable" name="availableStock" type="number" min="0" required>
         </div>
@@ -373,6 +378,11 @@
         <div class="form-field modal-field">
           <label for="addEquipmentCategory">Category</label>
           <select id="addEquipmentCategory" name="category" required></select>
+        </div>
+
+        <div class="form-field modal-field">
+          <label for="addEquipmentEvent">Event</label>
+          <input id="addEquipmentEvent" name="event" type="text" placeholder="e.g. Boxing" required>
         </div>
 
         <div class="form-field modal-field">
