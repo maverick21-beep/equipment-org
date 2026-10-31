@@ -266,6 +266,13 @@
   @keyframes fadein{ from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:none;} }
 
   .page-head{ margin-bottom: 26px; }
+  .procurement-page-head{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-end;
+    gap:16px;
+    flex-wrap:wrap;
+  }
   h1.glitch{
     font-family: var(--font-display);
     font-weight:700;
@@ -535,6 +542,14 @@
   .po-sub{ font-size:12.5px; color: var(--text-dim); margin-top:2px; }
   .po-right{ display:flex; align-items:center; gap:18px; }
   .po-cost{ font-family: var(--font-mono); font-weight:600; font-size:15px; }
+  .po-status-select{
+    border: 1px solid var(--panel-border);
+    border-radius: 7px;
+    background: var(--control-bg);
+    color: var(--text);
+    padding: 8px 10px;
+    font: 11px var(--font-mono);
+  }
 
   #authView, #loadingView{ display:none; }
   #authView.active, #loadingView.active{ display:flex; align-items:center; justify-content:center; }
@@ -668,9 +683,14 @@
 
   .inventory-status-cell{
     display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    min-width: 110px;
+  }
+  .inventory-status-cell .btn{
+    width: 100%;
+    justify-content: center;
   }
   .inventory-edit-btn{
     border: 1px solid rgba(242,101,15,0.45);

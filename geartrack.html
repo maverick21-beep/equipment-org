@@ -216,8 +216,8 @@
       </div>
     </div>
 
-    <div class="checkout-table-section" id="pendingRejectedSection">
-      <div class="checkout-table-label">Pending / Rejected Requests</div>
+    <div class="checkout-table-section" id="pendingRequestsSection">
+      <div class="checkout-table-label">Pending Requests</div>
       <div class="table-wrap" style="margin-bottom:24px;">
       <table>
         <thead>
@@ -225,7 +225,7 @@
             <th>Borrower</th><th>Recipient</th><th>Equipment</th><th>Qty</th><th>Borrow Date</th><th>Expected Return</th><th>Purpose</th><th>Status</th><th>Action</th>
           </tr>
         </thead>
-        <tbody id="pendingRejectedBody"></tbody>
+        <tbody id="pendingRequestsBody"></tbody>
       </table>
       </div>
     </div>
@@ -254,6 +254,20 @@
       </table>
       </div>
     </div>
+
+    <div class="checkout-table-section" id="rejectedRequestsSection">
+      <div class="checkout-table-label">Rejected Requests</div>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Borrower</th><th>Recipient</th><th>Equipment</th><th>Qty</th><th>Borrow Date</th><th>Expected Return</th><th>Purpose</th><th>Status</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="rejectedRequestsBody"></tbody>
+      </table>
+      </div>
+    </div>
   </section>
 
   <!-- MAINTENANCE -->
@@ -267,9 +281,12 @@
 
   <!-- PROCUREMENT -->
   <section class="view" id="view-procurement">
-    <div class="page-head">
-      <h1 class="glitch">Procurement</h1>
-      <div class="page-sub" id="procSub">2 pending orders · $1,860 total</div>
+    <div class="page-head procurement-page-head">
+      <div>
+        <h1 class="glitch">Procurement</h1>
+        <div class="page-sub" id="procSub">2 pending orders · $1,860 total</div>
+      </div>
+      <button type="button" class="btn btn-orange" id="addPurchaseOrderBtn" style="display:none;">New Order</button>
     </div>
     <div class="po-grid" id="poGrid"></div>
   </section>
@@ -278,6 +295,56 @@
 </div>
 
 <div id="appNotice" class="app-notice" role="status" aria-live="polite"></div>
+
+<div id="purchaseOrderModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-backdrop" data-close-po="true"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="purchaseOrderTitle">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker">Admin Tools</div>
+        <h3 id="purchaseOrderTitle">New Procurement Order</h3>
+      </div>
+      <button type="button" class="modal-close" id="closePurchaseOrderModal" aria-label="Close procurement order modal">×</button>
+    </div>
+
+    <form id="purchaseOrderForm">
+      <div class="form-grid">
+        <div class="form-field modal-field">
+          <label for="poEquipment">Equipment</label>
+          <input id="poEquipment" name="equipment" type="text" required>
+        </div>
+        <div class="form-field modal-field">
+          <label for="poCategory">Category</label>
+          <select id="poCategory" name="category" required></select>
+        </div>
+        <div class="form-field modal-field">
+          <label for="poQuantity">Stock Items</label>
+          <input id="poQuantity" name="quantity" type="number" min="1" step="1" required>
+        </div>
+        <div class="form-field modal-field">
+          <label for="poUnitPrice">Price per Item</label>
+          <input id="poUnitPrice" name="unitPrice" type="number" min="0" step="0.01" required>
+        </div>
+        <div class="form-field modal-field">
+          <label for="poLocation">Location</label>
+          <input id="poLocation" name="location" type="text" required>
+        </div>
+        <div class="form-field modal-field">
+          <label for="poEvent">Event</label>
+          <input id="poEvent" name="event" type="text" placeholder="e.g. Boxing" required>
+        </div>
+        <div class="form-field modal-field">
+          <label for="poOrderDate">Order Date</label>
+          <input id="poOrderDate" name="orderDate" type="date" required>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="cancelPurchaseOrderModal">Cancel</button>
+        <button type="submit" class="btn btn-orange">Create Order</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <div id="adminEditModal" class="modal hidden" aria-hidden="true">
   <div class="modal-backdrop" data-close="true"></div>

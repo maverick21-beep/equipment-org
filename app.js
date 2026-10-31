@@ -481,6 +481,7 @@ async function loadCheckouts(){
       recipient,
       organizationName: recipient || '—',
       purpose: requestPurpose || '—',
+      checkedOutAt: c.checked_out_at || '',
       out: (c.checked_out_at || '').slice(0,10),
       due: c.due_date,
       qty: c.qty,
@@ -556,6 +557,7 @@ async function loadBorrowRequests(){
     status: req.status,
     purpose: req.purpose || 'No purpose provided',
     createdAt: req.created_at,
+    reviewedAt: req.reviewed_at,
     items: (req.items || []).map(item => ({
       id: item.id,
       equipmentId: item.equipment_id,
@@ -621,23 +623,35 @@ async function loadMaintenance(){
 
 async function loadProcurement(){
   if(currentProfile?.role !== 'admin'){ purchaseOrders = []; return; }
-  let { data } = await supabaseClient
+  const { data, error } = await supabaseClient
     .from('purchase_orders')
-    .select('*')
+    .select('*, category:equipment_categories(name)')
     .order('order_date', { ascending: false });
-  data = data || [];
-  purchaseOrders = data.map(p => {
+  if(error){
+    console.error('Error loading procurement orders:', error);
+    showNotice('Procurement orders could not be loaded. Check the Supabase schema and connection.', 'error');
+    return;
+  }
+  const orders = data || [];
+  purchaseOrders = orders.map(p => {
     const total = Number(p.total_cost || p.qty * p.unit_cost).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0});
     return {
+      uuid: p.id,
       id: p.po_number,
       name: p.equipment_description || `Order ${p.po_number} × ${p.qty}`,
       sub: `Ordered ${p.order_date}`,
       cost: total,
-      stage: mapPoStatus(p.status)
+      status: p.status,
+      stage: mapPoStatus(p.status),
+      quantity: p.qty,
+      unitCost: Number(p.unit_cost).toLocaleString('en-US', {style:'currency', currency:'USD', minimumFractionDigits:2}),
+      category: p.category?.name || '—',
+      location: p.location || '—',
+      event: p.event || '—'
     };
   });
   const poCount = document.getElementById('poCount');
-  if(poCount) poCount.textContent = data.filter(p => p.status !== 'received' && p.status !== 'cancelled').length;
+  if(poCount) poCount.textContent = orders.filter(p => !['received', 'in_use', 'cancelled'].includes(p.status)).length;
 }
 
 function mapPoStatus(s){
@@ -646,7 +660,9 @@ function mapPoStatus(s){
     approved: 'Approved',
     ordered: 'Ordered',
     shipped: 'Shipped',
+    waiting_for_arrival: 'Waiting for Arrival',
     received: 'Received',
+    in_use: 'In Use',
     cancelled: 'Cancelled'
   };
   return map[s] || s;
@@ -786,9 +802,11 @@ function attachInventoryFilters(){
 }
 
 function renderBorrowRequests(){
-  const pendingRejectedBody = document.getElementById('pendingRejectedBody');
-  const pendingRejectedSection = document.getElementById('pendingRejectedSection');
-  if(!pendingRejectedBody || !pendingRejectedSection) return;
+  const pendingRequestsBody = document.getElementById('pendingRequestsBody');
+  const pendingRequestsSection = document.getElementById('pendingRequestsSection');
+  const rejectedRequestsBody = document.getElementById('rejectedRequestsBody');
+  const rejectedRequestsSection = document.getElementById('rejectedRequestsSection');
+  if(!pendingRequestsBody || !pendingRequestsSection || !rejectedRequestsBody || !rejectedRequestsSection) return;
 
   const isAdmin = currentProfile?.role === 'admin';
   const searchValue = checkoutSearchTerm.trim().toLowerCase();
@@ -806,7 +824,11 @@ function renderBorrowRequests(){
     return true;
   };
   const visibleRequests = borrowRequests.filter(request => matchesFilter(request) && matchesSearch(request));
-  const pendingRejectedRequests = visibleRequests.filter(request => request.status === 'pending' || request.status === 'rejected');
+  const pendingRequests = visibleRequests.filter(request => request.status === 'pending');
+  const rejectedRequests = visibleRequests
+    .filter(request => request.status === 'rejected')
+    .sort((a, b) => new Date(b.reviewedAt || b.createdAt) - new Date(a.reviewedAt || a.createdAt))
+    .slice(0, 10);
 
   const renderRequestRows = requests => requests.length ? requests.map(req => {
     const firstItem = req.items[0] || {};
@@ -832,9 +854,10 @@ function renderBorrowRequests(){
       </tr>`;
   }).join('') : '<tr><td colspan="9" class="dim">No matching requests found.</td></tr>';
 
-  const requestTablesVisible = ['all', 'pending', 'rejected'].includes(checkoutFilter);
-  pendingRejectedSection.style.display = requestTablesVisible ? '' : 'none';
-  pendingRejectedBody.innerHTML = renderRequestRows(pendingRejectedRequests);
+  pendingRequestsSection.style.display = ['all', 'pending'].includes(checkoutFilter) ? '' : 'none';
+  pendingRequestsBody.innerHTML = renderRequestRows(pendingRequests);
+  rejectedRequestsSection.style.display = ['all', 'rejected'].includes(checkoutFilter) ? '' : 'none';
+  rejectedRequestsBody.innerHTML = renderRequestRows(rejectedRequests);
 
   document.querySelectorAll('[data-request-action]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -885,80 +908,21 @@ function renderReturnRequests(){
 
 async function approveBorrowRequest(requestId, button){
   const request = borrowRequests.find(r => r.id === requestId);
-  console.debug('approveBorrowRequest start', { requestId, found: !!request, request });
   if(!request) return;
   const restoreButton = setButtonProcessing(button, 'APPROVING...');
 
-  for(const item of request.items){
-    const { data: equipment, error: equipmentError } = await supabaseClient
-      .from('equipment')
-      .select('status, available_qty')
-      .eq('id', item.equipmentId)
-      .single();
+  const { error } = await supabaseClient.rpc('approve_borrow_request', {
+    request_uuid: requestId
+  });
 
-    if(equipmentError || !equipment){
-      console.error(equipmentError);
-      restoreButton();
-      showNotice('Approval failed. The equipment could not be verified.', 'error');
-      return;
-    }
-
-    if(equipment.status === 'maintenance'){
-      restoreButton();
-      showNotice('Approval failed. This equipment is currently under maintenance.', 'error');
-      return;
-    }
-
-    if(equipment.status === 'deactivated'){
-      restoreButton();
-      showNotice('Approval failed. This equipment is no longer available.', 'error');
-      return;
-    }
-  }
-
-  const { data: requestProfile } = await supabaseClient
-    .from('profiles')
-    .select('id, full_name, email')
-    .eq('id', request.userId)
-    .maybeSingle();
-
-  const borrowerName = requestProfile?.full_name || requestProfile?.email || request.borrower;
-
-      // Create checkout records (stock is already deducted during request)
-      for(const item of request.items){
-        const { error: checkoutError } = await supabaseClient.from('checkouts').insert({
-          request_item_id: item.id,
-          equipment_id: item.equipmentId,
-          user_id: request.userId,
-          user_name: borrowerName,
-          user_team: null,
-          qty: item.qty,
-          checked_out_at: new Date().toISOString(),
-          due_date: item.dueDate || dateAfterDays(14),
-          status: 'checked_out',
-          processed_by: currentUser.id
-        });
-
-        if(checkoutError){
-          console.error(checkoutError);
-          restoreButton();
-          showNotice('Approval failed. The checkout record was not created.', 'error');
-          return;
-        }
-      }
-
-      const { error: updateRequestError } = await supabaseClient
-    .from('borrow_requests')
-    .update({ status: 'approved', reviewed_by: currentUser.id, reviewed_at: new Date().toISOString() })
-    .eq('id', requestId);
-
-  if(updateRequestError){
-    console.error(updateRequestError);
+  if(error){
+    console.error(error);
     restoreButton();
-    showNotice('Approval failed. The reservation status was not updated.', 'error');
+    showNotice(error.message || 'Approval failed. The reservation status was not updated.', 'error');
     return;
   }
 
+  restoreButton();
   await loadAllData();
   showNotice('Borrow request approved successfully.', 'success');
 }
@@ -1025,7 +989,9 @@ function getFilteredCheckouts(){
 function renderCheckouts(){
   const activeCount = checkouts.filter(c=>!c.returned).length;
   const overdueCount = checkouts.filter(c=>!c.returned && c.overdue).length;
-  const filtered = getFilteredCheckouts();
+  const filtered = getFilteredCheckouts()
+    .sort((a, b) => new Date(b.checkedOutAt) - new Date(a.checkedOutAt))
+    .slice(0, 10);
   const sub = document.getElementById('coSub');
   if(sub) sub.textContent = `${filtered.length} shown · ${overdueCount} overdue`;
   const alertBox = document.getElementById('coAlert');
@@ -1165,7 +1131,10 @@ function renderMaintenance(){
 
   const colorMap = {high:'var(--red)', medium:'var(--yellow)', low:'var(--blue)'};
   const isAdmin = currentProfile?.role === 'admin';
-  grid.innerHTML = maintenanceData.map((m,idx)=>`
+  const orderedMaintenance = maintenanceData
+    .map((maintenance, index) => ({ maintenance, index }))
+    .sort((a, b) => Number(a.maintenance.done) - Number(b.maintenance.done));
+  grid.innerHTML = orderedMaintenance.map(({maintenance: m, index: idx})=>`
     <div class="maint-card ${m.done?'done':''}" style="--maint-color:${colorMap[m.priority]}">
       <div class="maint-top">
         <div>
@@ -1215,6 +1184,8 @@ async function markMaintenanceDone(maintId, idx, ev){
 function renderProcurement(){
   const grid = document.getElementById('poGrid');
   if(!grid) return;
+  const addButton = document.getElementById('addPurchaseOrderBtn');
+  if(addButton) addButton.style.display = currentProfile?.role === 'admin' ? '' : 'none';
 
   if(currentProfile?.role !== 'admin'){
     grid.innerHTML = '<div class="panel"><div class="dim">Procurement view is admin-only.</div></div>';
@@ -1225,11 +1196,11 @@ function renderProcurement(){
     return;
   }
 
-  if(!purchaseOrders.length){ grid.innerHTML = '<div class="dim">No purchase orders.</div>'; return; }
-  const pendingPOs = purchaseOrders.filter(p=>p.stage !== 'Received' && p.stage !== 'Cancelled');
+  const pendingPOs = purchaseOrders.filter(p=>!['received', 'in_use', 'cancelled'].includes(p.status));
   const total = purchaseOrders.reduce((s,p)=>s+parseFloat(String(p.cost).replace(/[^\d.]/g,''))||0, 0);
   const procSub = document.getElementById('procSub');
   if(procSub) procSub.textContent = `${pendingPOs.length} pending orders · ${total.toLocaleString()} total`;
+  if(!purchaseOrders.length){ grid.innerHTML = '<div class="dim">No purchase orders.</div>'; return; }
 
   grid.innerHTML = purchaseOrders.map(p=>`
     <div class="po-card">
@@ -1237,14 +1208,80 @@ function renderProcurement(){
         <div class="po-id">${p.id}</div>
         <div>
           <div class="po-name">${p.name}</div>
+          <div class="po-sub">${p.category} · ${p.quantity} item(s) · ${p.location} · ${p.event}</div>
           <div class="po-sub">${p.sub}</div>
         </div>
       </div>
       <div class="po-right">
-        <span class="pill maintenance">${p.stage}</span>
-        <div class="po-cost">${p.cost}</div>
+        <select class="po-status-select" data-po-status-id="${p.uuid}" aria-label="Status for ${p.id}">
+          ${[
+            ['pending_approval', 'Pending Approval'],
+            ['approved', 'Approved'],
+            ['ordered', 'Ordered'],
+            ['shipped', 'Shipped'],
+            ['waiting_for_arrival', 'Waiting for Arrival'],
+            ['received', 'Received'],
+            ['in_use', 'In Use'],
+            ['cancelled', 'Cancelled']
+          ].map(([value, label]) => `<option value="${value}" ${p.status === value ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+        <div>
+          <div class="po-cost">${p.cost}</div>
+          <div class="po-sub">${p.unitCost} per item</div>
+        </div>
       </div>
     </div>`).join('');
+
+  grid.querySelectorAll('[data-po-status-id]').forEach(select => {
+    select.addEventListener('change', () => updatePurchaseOrderStatus(select));
+  });
+}
+
+function openPurchaseOrderModal(){
+  if(!equipmentCategories.length){
+    showNotice('Add an equipment category before creating a procurement order.', 'error');
+    return;
+  }
+  const categorySelect = document.getElementById('poCategory');
+  categorySelect.innerHTML = equipmentCategories.map(category =>
+    `<option value="${category.id}">${category.name}</option>`
+  ).join('');
+  const today = new Date();
+  today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+  document.getElementById('poOrderDate').value = today.toISOString().slice(0, 10);
+  const modal = document.getElementById('purchaseOrderModal');
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closePurchaseOrderModal(){
+  const modal = document.getElementById('purchaseOrderModal');
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  document.getElementById('purchaseOrderForm').reset();
+}
+
+async function updatePurchaseOrderStatus(select){
+  if(currentProfile?.role !== 'admin') return;
+  const order = purchaseOrders.find(item => item.uuid === select.dataset.poStatusId);
+  if(!order) return;
+  const previousStatus = order.status;
+  select.disabled = true;
+  const { error } = await supabaseClient
+    .from('purchase_orders')
+    .update({ status: select.value })
+    .eq('id', order.uuid);
+
+  if(error){
+    console.error(error);
+    select.value = previousStatus;
+    select.disabled = false;
+    showNotice('Order status could not be updated.', 'error');
+    return;
+  }
+
+  await loadAllData();
+  showNotice('Order status updated successfully.', 'success');
 }
 
 // =====================================================
@@ -1779,9 +1816,56 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
 });
 
 document.getElementById('addEquipmentBtn')?.addEventListener('click', openAddEquipmentModal);
+document.getElementById('addPurchaseOrderBtn')?.addEventListener('click', openPurchaseOrderModal);
+document.getElementById('closePurchaseOrderModal')?.addEventListener('click', closePurchaseOrderModal);
+document.getElementById('cancelPurchaseOrderModal')?.addEventListener('click', closePurchaseOrderModal);
+document.querySelector('[data-close-po]')?.addEventListener('click', closePurchaseOrderModal);
 document.getElementById('deleteEquipmentBtn')?.addEventListener('click', removeEquipmentFromInventory);
 document.getElementById('deactivateEquipmentBtn')?.addEventListener('click', toggleEquipmentActivation);
 document.getElementById('addEquipmentCategory')?.addEventListener('change', updateGeneratedEquipmentSku);
+
+document.getElementById('purchaseOrderForm')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  if(currentProfile?.role !== 'admin' || !currentUser) return;
+
+  const form = event.currentTarget;
+  const quantity = Number(form.elements.namedItem('quantity').value);
+  const unitCost = Number(form.elements.namedItem('unitPrice').value);
+  const submit = form.querySelector('button[type="submit"]');
+
+  if(!Number.isInteger(quantity) || quantity < 1 || !Number.isFinite(unitCost) || unitCost < 0){
+    showNotice('Enter a whole-number quantity and a valid non-negative unit price.', 'error');
+    return;
+  }
+
+  const restoreSubmit = setButtonProcessing(submit, 'CREATING...');
+  const { error } = await supabaseClient.from('purchase_orders').insert({
+    po_number: `PO-${Date.now()}`,
+    equipment_description: form.elements.namedItem('equipment').value.trim(),
+    category_id: form.elements.namedItem('category').value,
+    qty: quantity,
+    unit_cost: unitCost,
+    order_date: form.elements.namedItem('orderDate').value,
+    status: 'pending_approval',
+    location: form.elements.namedItem('location').value.trim(),
+    event: form.elements.namedItem('event').value.trim(),
+    created_by: currentUser.id
+  });
+
+  if(error){
+    console.error(error);
+    restoreSubmit();
+    showNotice(error.code === '23505'
+      ? 'Could not create a unique order number. Please try again.'
+      : 'Procurement order could not be created. No changes were saved.', 'error');
+    return;
+  }
+
+  restoreSubmit();
+  closePurchaseOrderModal();
+  await loadAllData();
+  showNotice('Procurement order created successfully.', 'success');
+});
 
 document.getElementById('addEquipmentForm')?.addEventListener('submit', async event => {
   event.preventDefault();
