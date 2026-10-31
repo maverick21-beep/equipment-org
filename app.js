@@ -415,6 +415,7 @@ async function loadInventory(){
     name: e.name,
     cat: e.category?.name || 'Uncategorized',
     categoryId: e.category_id || e.category?.id || null,
+    event: e.event || '—',
     have: e.available_qty,
     maintenanceQty: e.maintenance_qty || 0,
     total: e.total_qty,
@@ -751,12 +752,13 @@ function renderInventory(){
 }
 
 function renderInventoryRows(rows, isAdmin, emptyMessage){
-  if(!rows.length) return `<tr><td colspan="8" class="dim">${emptyMessage}</td></tr>`;
+  if(!rows.length) return `<tr><td colspan="9" class="dim">${emptyMessage}</td></tr>`;
   return rows.map(i=>`
     <tr class="${i.rawStatus === 'deactivated' ? 'deactivated-row' : ''}">
       <td class="mono">${i.sku}</td>
       <td class="strong">${i.name}</td>
       <td class="dim">${i.cat}</td>
+      <td class="dim">${i.event}</td>
       <td><strong>${i.rawStatus === 'deactivated' ? 0 : i.have}</strong><span class="dim">/${i.total}</span></td>
       <td><span class="cond ${condClass(i.cond)}">${i.cond}</span></td>
       <td class="dim">${i.loc}</td>
@@ -1259,6 +1261,7 @@ function openEquipmentModal(equipmentId){
   ).join('');
 
   document.getElementById('editEquipmentName').value = item.name;
+  document.getElementById('editEquipmentEvent').value = item.event === '—' ? '' : item.event;
   document.getElementById('editEquipmentAvailable').value = item.have;
   document.getElementById('editEquipmentTotal').value = item.total;
   document.getElementById('editEquipmentCondition').value = item.cond;
@@ -1799,6 +1802,7 @@ document.getElementById('addEquipmentForm')?.addEventListener('submit', async ev
     sku: form.sku.value.trim(),
     name: form.elements.namedItem('name').value.trim(),
     category_id: form.category.value,
+    event: form.event.value.trim(),
     available_qty: availableQty,
     total_qty: totalQty,
     condition: form.condition.value,
@@ -1845,6 +1849,7 @@ document.getElementById('adminEditForm').addEventListener('submit', async (event
   const basePayload = {
     name: form.equipmentName.value.trim(),
     category_id: form.equipmentCategory.value,
+    event: form.event.value.trim(),
     total_qty: totalQty,
     condition: form.condition.value,
     location: form.location.value.trim()
