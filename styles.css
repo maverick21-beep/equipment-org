@@ -441,11 +441,20 @@
   td.mono{ font-family: var(--font-mono); font-size:12.5px; color: var(--text-faint); }
   td.strong{ font-weight:600; }
   td.dim{ color: var(--text-dim); }
-  .cond{ font-weight:600; font-size:13.5px; }
-  .cond.excellent{ color: var(--green); }
+  .cond{ font-weight:600; font-size:13.5px; }  .cond.excellent{ color: var(--green); }
   .cond.good{ color: var(--blue); }
   .cond.fair{ color: var(--yellow); }
   .cond.poor{ color: var(--red); }
+
+  .unit-tags{
+    display:block;
+    margin-top:3px;
+    color:var(--orange);
+    font:10.5px var(--font-mono);
+    letter-spacing:0.3px;
+    white-space:normal;
+    word-break:break-word;
+  }
 
   .pill{
     display:inline-block;
