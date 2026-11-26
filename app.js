@@ -30,6 +30,7 @@ let currentAdminReturnRequest = null;
 let notifications = [];
 let notificationChannel = null;
 let inventoryLastSyncedAt = null;
+let skuGenerationRequest = 0;
 const THEME_STORAGE_KEY = 'geartrack-theme';
 
 function formatLocalDateInput(date){
@@ -1327,10 +1328,12 @@ function closeAddEquipmentModal(){
   if(submit){ submit.disabled = false; submit.textContent = 'Add Equipment'; }
 }
 
-function updateGeneratedEquipmentSku(){
+async function updateGeneratedEquipmentSku(){
   const form = document.getElementById('addEquipmentForm');
-  const selectedCategory = equipmentCategories.find(category => category.id === form?.category.value);
+  const categorySelect = form?.elements.namedItem('category');
   const skuInput = document.getElementById('addEquipmentSku');
+  const submit = form?.querySelector('button[type="submit"]');
+  const selectedCategory = equipmentCategories.find(category => category.id === categorySelect?.value);
   if(!selectedCategory || !skuInput) return;
 
   const categoryPrefixes = {
@@ -1346,13 +1349,33 @@ function updateGeneratedEquipmentSku(){
     .join('')
     .slice(0, 2)
     .toUpperCase();
-  const highestNumber = inventory.reduce((highest, item) => {
-    if(!item.sku.startsWith(`${prefix}-`)) return highest;
-    const number = Number(item.sku.slice(prefix.length + 1));
-    return Number.isInteger(number) ? Math.max(highest, number) : highest;
+
+  const requestId = ++skuGenerationRequest;
+  skuInput.value = '';
+  if(submit) submit.disabled = true;
+
+  const { data, error } = await supabaseClient
+    .from('equipment')
+    .select('sku')
+    .like('sku', `${prefix}-%`);
+
+  if(requestId !== skuGenerationRequest || categorySelect?.value !== selectedCategory.id) return;
+
+  if(error){
+    console.error('Could not load existing SKUs:', error);
+    if(submit) submit.disabled = false;
+    showNotice('Could not generate an equipment SKU. Please change the category and try again.', 'error');
+    return;
+  }
+
+  const skuPattern = new RegExp(`^${prefix}-(\\d+)$`);
+  const highestNumber = (data || []).reduce((highest, item) => {
+    const match = item.sku.match(skuPattern);
+    return match ? Math.max(highest, Number(match[1])) : highest;
   }, 0);
 
   skuInput.value = `${prefix}-${String(highestNumber + 1).padStart(4, '0')}`;
+  if(submit) submit.disabled = false;
 }
 
 async function removeEquipmentFromInventory(){
@@ -1864,7 +1887,12 @@ document.getElementById('addEquipmentForm')?.addEventListener('submit', async ev
   const totalQty = Number(form.total.value);
   const availableQty = Number(form.available.value);
   const submit = form.querySelector('button[type="submit"]');
+  const sku = form.elements.namedItem('sku').value.trim();
 
+  if(!sku){
+    showNotice('Equipment SKU is still being generated. Please wait and try again.', 'warning');
+    return;
+  }
   if(!Number.isInteger(totalQty) || totalQty < 0 || !Number.isInteger(availableQty) || availableQty < 0 || availableQty > totalQty){
     showNotice('Available stock must be a whole number between zero and total stock.', 'error');
     return;
@@ -1872,7 +1900,7 @@ document.getElementById('addEquipmentForm')?.addEventListener('submit', async ev
 
   const restoreSubmit = setButtonProcessing(submit, 'ADDING...');
   const { error } = await supabaseClient.from('equipment').insert({
-    sku: form.sku.value.trim(),
+    sku,
     name: form.elements.namedItem('name').value.trim(),
     category_id: form.category.value,
     event: form.event.value.trim(),
