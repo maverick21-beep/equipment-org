@@ -1373,41 +1373,25 @@ async function removeEquipmentFromInventory(){
   if(currentProfile?.role !== 'admin' || !currentEditEquipmentId) return;
   const item = inventory.find(equipment => equipment.id === currentEditEquipmentId);
   if(!item) return;
-  if(!window.confirm(`Remove ${item.name} from active inventory? Checkout history will be kept.`)) return;
+  if(!window.confirm(`Permanently delete ${item.name}? This cannot be undone and will also delete its borrow and checkout history.`)) return;
 
   const removeButton = document.getElementById('deleteEquipmentBtn');
-  const restoreButton = setButtonProcessing(removeButton, 'REMOVING...');
-  const { data: activeCheckouts, error: checkoutError } = await supabaseClient
-    .from('checkouts')
-    .select('qty')
-    .eq('equipment_id', currentEditEquipmentId)
-    .eq('status', 'checked_out');
+  const restoreButton = setButtonProcessing(removeButton, 'DELETING...');
 
-  if(checkoutError){
-    console.error(checkoutError);
-    restoreButton();
-    showNotice('Equipment could not be removed. Checkout history could not be checked.', 'error');
-    return;
-  }
-
-  const outstandingQty = (activeCheckouts || []).reduce((total, checkout) => total + Number(checkout.qty || 0), 0);
-  const { error } = await supabaseClient.from('equipment').update({
-    available_qty: 0,
-    maintenance_qty: 0,
-    total_qty: outstandingQty,
-    status: 'deactivated'
-  }).eq('id', currentEditEquipmentId);
+  const { error } = await supabaseClient.rpc('delete_equipment_permanently', {
+    equipment_uuid: currentEditEquipmentId
+  });
 
   if(error){
     console.error(error);
     restoreButton();
-    showNotice('Equipment could not be removed. No changes were saved.', 'error');
+    showNotice(error.message || 'Equipment could not be deleted. No changes were saved.', 'error');
     return;
   }
 
   closeEquipmentModal();
   await loadAllData();
-  showNotice('Equipment removed from active inventory. Checkout history was preserved.', 'success');
+  showNotice('Equipment deleted permanently.', 'success');
 }
 
 async function toggleEquipmentActivation(){
