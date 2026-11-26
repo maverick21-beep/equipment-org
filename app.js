@@ -476,6 +476,8 @@ async function loadCheckouts(){
       id: c.id,
       ref: `C${String(idx+1).padStart(3,'0')}`,
       name: c.equipment?.name || 'Unknown item',
+      sku: c.equipment?.sku || '',
+      unitNumbers: c.unit_numbers || [],
       athlete: c.user_name,
       team: c.user_team || '',
       recipient,
@@ -537,7 +539,7 @@ async function loadBorrowRequests(){
   // use the user_id foreign key relationship for the requester's profile
   let query = supabaseClient
     .from('borrow_requests')
-    .select(`*, items:borrow_request_items(*, equipment:equipment(id, name, available_qty, total_qty)), profile:profiles!borrow_requests_user_id_fkey(id, full_name, email)`) 
+    .select(`*, items:borrow_request_items(*, equipment:equipment(id, name, sku, available_qty, total_qty)), profile:profiles!borrow_requests_user_id_fkey(id, full_name, email)`) 
     .order('created_at', { ascending: false });
 
   if(!isAdmin){
@@ -562,6 +564,8 @@ async function loadBorrowRequests(){
       id: item.id,
       equipmentId: item.equipment_id,
       equipmentName: item.equipment?.name || 'Equipment',
+      sku: item.equipment?.sku || '',
+      unitNumbers: item.unit_numbers || [],
       qty: item.qty,
       borrowDate: item.borrow_date,
       dueDate: item.expected_return_date,
@@ -689,6 +693,11 @@ if(tabsEl){
 // =====================================================
 function condClass(c){ return c.toLowerCase(); }
 function statusClass(s){ return s.toLowerCase().replace(' ',''); }
+function formatUnitTags(sku, numbers){
+  if(!numbers || !numbers.length) return '';
+  const tags = numbers.map(n => `${sku}-${n}`).join(', ');
+  return `<span class="unit-tags mobile-safe">${tags}</span>`;
+}
 
 function renderCategories(){
   const el = document.getElementById('catRows');
@@ -832,7 +841,7 @@ function renderBorrowRequests(){
 
   const renderRequestRows = requests => requests.length ? requests.map(req => {
     const firstItem = req.items[0] || {};
-    const itemText = req.items.map(item => `${item.equipmentName} (${item.qty})`).join(', ');
+    const itemText = req.items.map(item => `${item.equipmentName} (${item.qty})${item.unitNumbers?.length ? ' · ' + item.unitNumbers.map(n=>`${item.sku}-${n}`).join(', ') : ''}`).join(', ');
     const requestStatusClass = req.status === 'approved' ? 'available' : req.status === 'rejected' ? 'maintenance' : 'maintenance';
     const actions = isAdmin && req.status === 'pending' ? `
       <div class="inventory-status-cell">
@@ -932,30 +941,15 @@ async function rejectBorrowRequest(requestId, button){
   if(!request) return;
   const restoreButton = setButtonProcessing(button, 'REJECTING...');
 
-  const { error } = await supabaseClient
-    .from('borrow_requests')
-    .update({ status: 'rejected', reviewed_by: currentUser.id, reviewed_at: new Date().toISOString() })
-    .eq('id', requestId);
+  const { error } = await supabaseClient.rpc('reject_borrow_request', {
+    request_uuid: requestId
+  });
 
   if(error){
     console.error(error);
     restoreButton();
-    showNotice('Rejection failed. The reservation was not changed.', 'error');
+    showNotice(error.message || 'Rejection failed. The reservation was not changed.', 'error');
     return;
-  }
-
-  // Restore the reserved stock
-  for (const item of request.items) {
-    const { error: restoreError } = await supabaseClient.rpc('increment_equipment_qty', { 
-      equipment_uuid: item.equipmentId, 
-      qty_increment: item.qty 
-    });
-    if(restoreError){
-      console.error(restoreError);
-      restoreButton();
-      showNotice('The request was rejected, but stock restoration failed.', 'error');
-      return;
-    }
   }
 
   await loadAllData();
@@ -1024,7 +1018,7 @@ function renderCheckouts(){
       return `
         <tr class="${c.returned?'done-row':''}">
           <td class="mono">${c.ref}</td>
-          <td class="strong">${c.name}</td>
+          <td class="strong">${c.name}${formatUnitTags(c.sku, c.unitNumbers)}</td>
           <td>${c.athlete}</td>
           <td class="dim">${c.recipient || c.organizationName || c.team || '-'}</td>
           <td class="dim">${c.purpose || '-'}</td>
@@ -1080,35 +1074,13 @@ async function markReturned(checkoutId, qty, ev){
   const btn = ev?.target;
   const restoreButton = setButtonProcessing(btn, 'RETURNING...');
 
-  const { data: co, error: checkoutLookupError } = await supabaseClient.from('checkouts').select('equipment_id').eq('id', checkoutId).single();
-  if(checkoutLookupError || !co){
-    console.error(checkoutLookupError);
+  const { error } = await supabaseClient.rpc('admin_mark_returned', { checkout_uuid: checkoutId });
+
+  if(error){
+    console.error(error);
     restoreButton();
-    showNotice('Return failed. The checkout could not be found.', 'error');
+    showNotice(error.message || 'Return failed. No changes were saved.', 'error');
     return;
-  }
-
-  const { error: returnError } = await supabaseClient.from('checkouts').update({
-    status: 'returned',
-    returned_at: new Date().toISOString(),
-    returned_by: currentProfile.id
-  }).eq('id', checkoutId);
-
-  if(returnError){
-    console.error(returnError);
-    restoreButton();
-    showNotice('Return failed. No changes were saved.', 'error');
-    return;
-  }
-
-  if(co.equipment_id){
-    const { error: stockError } = await supabaseClient.rpc('increment_equipment_qty', { equipment_uuid: co.equipment_id, qty_increment: qty });
-    if(stockError){
-      console.error(stockError);
-      showNotice('The checkout was marked returned, but stock could not be restored.', 'error');
-      await loadAllData();
-      return;
-    }
   }
 
   await loadAllData();
