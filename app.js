@@ -693,9 +693,12 @@ if(tabsEl){
 // =====================================================
 function condClass(c){ return c.toLowerCase(); }
 function statusClass(s){ return s.toLowerCase().replace(' ',''); }
+function unitTag(sku, number){
+  return `${sku}-${String(number).padStart(2, '0')}`;
+}
 function formatUnitTags(sku, numbers){
   if(!numbers || !numbers.length) return '';
-  const tags = numbers.map(n => `${sku}-${n}`).join(', ');
+  const tags = numbers.map(n => unitTag(sku, n)).join(', ');
   return `<span class="unit-tags mobile-safe">${tags}</span>`;
 }
 
@@ -841,7 +844,7 @@ function renderBorrowRequests(){
 
   const renderRequestRows = requests => requests.length ? requests.map(req => {
     const firstItem = req.items[0] || {};
-    const itemText = req.items.map(item => `${item.equipmentName} (${item.qty})${item.unitNumbers?.length ? ' · ' + item.unitNumbers.map(n=>`${item.sku}-${n}`).join(', ') : ''}`).join(', ');
+    const itemText = req.items.map(item => `${item.equipmentName} (${item.qty})${item.unitNumbers?.length ? ' · ' + item.unitNumbers.map(n=>unitTag(item.sku, n)).join(', ') : ''}`).join(', ');
     const requestStatusClass = req.status === 'approved' ? 'available' : req.status === 'rejected' ? 'maintenance' : 'maintenance';
     const actions = isAdmin && req.status === 'pending' ? `
       <div class="inventory-status-cell">
@@ -1019,7 +1022,7 @@ function renderCheckouts(){
         <tr class="${c.returned?'done-row':''}">
           <td class="mono">${c.ref}</td>
           <td class="strong">${c.name}</td>
-          <td class="mono sku-cell">${c.unitNumbers?.length ? c.unitNumbers.map(n=>`${c.sku}-${n}`).join(', ') : (c.sku || '—')}</td>
+          <td class="mono sku-cell">${c.unitNumbers?.length ? c.unitNumbers.map(n=>unitTag(c.sku, n)).join(', ') : (c.sku || '—')}</td>
           <td>${c.athlete}</td>
           <td class="dim">${c.recipient || c.organizationName || c.team || '-'}</td>
           <td class="dim">${c.purpose || '-'}</td>
