@@ -30,7 +30,6 @@ let currentAdminReturnRequest = null;
 let notifications = [];
 let notificationChannel = null;
 let inventoryLastSyncedAt = null;
-let skuGenerationRequest = 0;
 const THEME_STORAGE_KEY = 'geartrack-theme';
 
 function formatLocalDateInput(date){
@@ -446,7 +445,6 @@ async function loadInventory(){
 function mapEquipStatus(status, have, total){
   if(status === 'maintenance') return 'Maintenance';
   if(status === 'deactivated') return 'Deactivated';
-  if(total === 0) return 'Unavailable';
   if(have <= 0 && total > 0) return 'Checked Out';
   return 'Available';
 }
@@ -454,7 +452,7 @@ function mapEquipStatus(status, have, total){
 async function loadCheckouts(){
   let { data, error } = await supabaseClient
     .from('checkouts')
-    .select('*, equipment:equipment(name, sku), request_item:borrow_request_items!request_item_id(borrow_date, expected_return_date, request:borrow_requests(purpose, organization_name, status)), returnRequests:return_requests(id, status, quantity, unit_numbers, requested_at, rejection_reason)')
+    .select('*, equipment:equipment(name, sku), request_item:borrow_request_items!request_item_id(borrow_date, expected_return_date, request:borrow_requests(purpose, organization_name, status)), returnRequests:return_requests(id, status, quantity, requested_at, rejection_reason)')
     .order('checked_out_at', { ascending: false });
 
   if(error){
@@ -478,13 +476,6 @@ async function loadCheckouts(){
       id: c.id,
       ref: `C${String(idx+1).padStart(3,'0')}`,
       name: c.equipment?.name || 'Unknown item',
-      sku: c.equipment?.sku || '',
-      unitNumbers: c.unit_numbers || [],
-      returnedUnitNumbers: c.status === 'returned'
-        ? c.unit_numbers || []
-        : checkoutReturnRequests
-          .filter(request => request.status === 'approved')
-          .flatMap(request => request.unit_numbers || []),
       athlete: c.user_name,
       team: c.user_team || '',
       recipient,
@@ -502,9 +493,6 @@ async function loadCheckouts(){
       returnReason: returnRequest?.rejection_reason || ''
     };
   });
-  checkouts.forEach(checkout => {
-    checkout.outstandingUnitNumbers = checkout.unitNumbers.filter(number => !checkout.returnedUnitNumbers.includes(number));
-  });
   checkoutCount = checkouts.length;
 }
 
@@ -516,7 +504,7 @@ async function loadReturnRequests(){
 
   const { data, error } = await supabaseClient
     .from('return_requests')
-    .select(`*, checkout:checkouts(id, equipment_id, user_id, user_name, qty, unit_numbers, checked_out_at, due_date, status, equipment:equipment(name, sku)), profile:profiles!return_requests_user_id_fkey(full_name, email)`)
+    .select(`*, checkout:checkouts(id, equipment_id, user_id, user_name, qty, checked_out_at, due_date, status, equipment:equipment(name, sku)), profile:profiles!return_requests_user_id_fkey(full_name, email)`)
     .eq('status', 'pending')
     .order('requested_at', { ascending: false });
 
@@ -534,9 +522,7 @@ async function loadReturnRequests(){
     equipmentName: request.checkout?.equipment?.name || 'Unknown item',
     ref: request.checkout?.equipment?.sku || '—',
     quantity: request.quantity,
-    unitNumbers: request.unit_numbers || [],
     checkoutQuantity: request.checkout?.qty || 0,
-    checkoutUnitNumbers: request.checkout?.unit_numbers || [],
     checkedOutAt: request.checkout?.checked_out_at || '',
     dueDate: request.checkout?.due_date || '—',
     requestedAt: request.requested_at,
@@ -551,7 +537,7 @@ async function loadBorrowRequests(){
   // use the user_id foreign key relationship for the requester's profile
   let query = supabaseClient
     .from('borrow_requests')
-    .select(`*, items:borrow_request_items(*, equipment:equipment(id, name, sku, available_qty, total_qty)), profile:profiles!borrow_requests_user_id_fkey(id, full_name, email)`) 
+    .select(`*, items:borrow_request_items(*, equipment:equipment(id, name, available_qty, total_qty)), profile:profiles!borrow_requests_user_id_fkey(id, full_name, email)`) 
     .order('created_at', { ascending: false });
 
   if(!isAdmin){
@@ -576,8 +562,6 @@ async function loadBorrowRequests(){
       id: item.id,
       equipmentId: item.equipment_id,
       equipmentName: item.equipment?.name || 'Equipment',
-      sku: item.equipment?.sku || '',
-      unitNumbers: item.unit_numbers || [],
       qty: item.qty,
       borrowDate: item.borrow_date,
       dueDate: item.expected_return_date,
@@ -705,14 +689,6 @@ if(tabsEl){
 // =====================================================
 function condClass(c){ return c.toLowerCase(); }
 function statusClass(s){ return s.toLowerCase().replace(' ',''); }
-function unitTag(sku, number){
-  return `${sku}-${number}`;
-}
-function formatUnitTags(sku, numbers){
-  if(!numbers || !numbers.length) return '';
-  const tags = numbers.map(n => unitTag(sku, n)).join(', ');
-  return `<span class="unit-tags mobile-safe">${tags}</span>`;
-}
 
 function renderCategories(){
   const el = document.getElementById('catRows');
@@ -856,7 +832,7 @@ function renderBorrowRequests(){
 
   const renderRequestRows = requests => requests.length ? requests.map(req => {
     const firstItem = req.items[0] || {};
-    const itemText = req.items.map(item => `${item.equipmentName} (${item.qty})${item.unitNumbers?.length ? ' · ' + item.unitNumbers.map(n=>unitTag(item.sku, n)).join(', ') : ''}`).join(', ');
+    const itemText = req.items.map(item => `${item.equipmentName} (${item.qty})`).join(', ');
     const requestStatusClass = req.status === 'approved' ? 'available' : req.status === 'rejected' ? 'maintenance' : 'maintenance';
     const actions = isAdmin && req.status === 'pending' ? `
       <div class="inventory-status-cell">
@@ -866,7 +842,8 @@ function renderBorrowRequests(){
 
     return `
       <tr>
-        <td><div class="strong">${req.borrower}</div>${req.email ? `<div class="mono dim">${req.email}</div>` : ''}</td>
+        <td><div class="strong">${req.borrower}</div><div class="mono dim">${req.email || req.organizationName}</div></td>
+        <td>${req.organizationName}</td>
         <td>${itemText}</td>
         <td>${req.items.reduce((sum, item) => sum + Number(item.qty || 0), 0)}</td>
         <td class="mono dim">${firstItem.borrowDate || '—'}</td>
@@ -875,7 +852,7 @@ function renderBorrowRequests(){
         <td><span class="pill ${requestStatusClass}">${req.status}</span></td>
         <td>${actions}</td>
       </tr>`;
-  }).join('') : '<tr><td colspan="8" class="dim">No matching requests found.</td></tr>';
+  }).join('') : '<tr><td colspan="9" class="dim">No matching requests found.</td></tr>';
 
   pendingRequestsSection.style.display = ['all', 'pending'].includes(checkoutFilter) ? '' : 'none';
   pendingRequestsBody.innerHTML = renderRequestRows(pendingRequests);
@@ -918,7 +895,6 @@ function renderReturnRequests(){
       <td class="strong">${request.equipmentName}</td>
       <td>${request.borrower}</td>
       <td class="strong">${request.quantity}</td>
-      <td class="mono sku-cell">${request.unitNumbers.map(number=>unitTag(request.ref, number)).join(', ') || '—'}</td>
       <td class="mono dim">${(request.checkedOutAt || '').slice(0,10)}</td>
       <td class="mono dim">${request.dueDate}</td>
       <td class="mono dim">${(request.requestedAt || '').slice(0,10)}</td>
@@ -956,15 +932,30 @@ async function rejectBorrowRequest(requestId, button){
   if(!request) return;
   const restoreButton = setButtonProcessing(button, 'REJECTING...');
 
-  const { error } = await supabaseClient.rpc('reject_borrow_request', {
-    request_uuid: requestId
-  });
+  const { error } = await supabaseClient
+    .from('borrow_requests')
+    .update({ status: 'rejected', reviewed_by: currentUser.id, reviewed_at: new Date().toISOString() })
+    .eq('id', requestId);
 
   if(error){
     console.error(error);
     restoreButton();
-    showNotice(error.message || 'Rejection failed. The reservation was not changed.', 'error');
+    showNotice('Rejection failed. The reservation was not changed.', 'error');
     return;
+  }
+
+  // Restore the reserved stock
+  for (const item of request.items) {
+    const { error: restoreError } = await supabaseClient.rpc('increment_equipment_qty', { 
+      equipment_uuid: item.equipmentId, 
+      qty_increment: item.qty 
+    });
+    if(restoreError){
+      console.error(restoreError);
+      restoreButton();
+      showNotice('The request was rejected, but stock restoration failed.', 'error');
+      return;
+    }
   }
 
   await loadAllData();
@@ -1034,8 +1025,8 @@ function renderCheckouts(){
         <tr class="${c.returned?'done-row':''}">
           <td class="mono">${c.ref}</td>
           <td class="strong">${c.name}</td>
-          <td class="mono sku-cell">${c.unitNumbers?.length ? c.unitNumbers.map(n=>unitTag(c.sku, n)).join(', ') : (c.sku || '—')}${c.returnedUnitNumbers?.length ? `<span class="unit-tags">Returned: ${c.returnedUnitNumbers.map(n=>unitTag(c.sku, n)).join(', ')}</span>` : ''}</td>
           <td>${c.athlete}</td>
+          <td class="dim">${c.recipient || c.organizationName || c.team || '-'}</td>
           <td class="dim">${c.purpose || '-'}</td>
           <td class="mono dim">${c.out}</td>
           <td class="mono ${c.overdue && !c.returned?'due-warn':'dim'}">${c.overdue && !c.returned?'⚠ ':''}${c.due}</td>
@@ -1089,13 +1080,35 @@ async function markReturned(checkoutId, qty, ev){
   const btn = ev?.target;
   const restoreButton = setButtonProcessing(btn, 'RETURNING...');
 
-  const { error } = await supabaseClient.rpc('admin_mark_returned', { checkout_uuid: checkoutId });
-
-  if(error){
-    console.error(error);
+  const { data: co, error: checkoutLookupError } = await supabaseClient.from('checkouts').select('equipment_id').eq('id', checkoutId).single();
+  if(checkoutLookupError || !co){
+    console.error(checkoutLookupError);
     restoreButton();
-    showNotice(error.message || 'Return failed. No changes were saved.', 'error');
+    showNotice('Return failed. The checkout could not be found.', 'error');
     return;
+  }
+
+  const { error: returnError } = await supabaseClient.from('checkouts').update({
+    status: 'returned',
+    returned_at: new Date().toISOString(),
+    returned_by: currentProfile.id
+  }).eq('id', checkoutId);
+
+  if(returnError){
+    console.error(returnError);
+    restoreButton();
+    showNotice('Return failed. No changes were saved.', 'error');
+    return;
+  }
+
+  if(co.equipment_id){
+    const { error: stockError } = await supabaseClient.rpc('increment_equipment_qty', { equipment_uuid: co.equipment_id, qty_increment: qty });
+    if(stockError){
+      console.error(stockError);
+      showNotice('The checkout was marked returned, but stock could not be restored.', 'error');
+      await loadAllData();
+      return;
+    }
   }
 
   await loadAllData();
@@ -1328,12 +1341,10 @@ function closeAddEquipmentModal(){
   if(submit){ submit.disabled = false; submit.textContent = 'Add Equipment'; }
 }
 
-async function updateGeneratedEquipmentSku(){
+function updateGeneratedEquipmentSku(){
   const form = document.getElementById('addEquipmentForm');
-  const categorySelect = form?.elements.namedItem('category');
+  const selectedCategory = equipmentCategories.find(category => category.id === form?.category.value);
   const skuInput = document.getElementById('addEquipmentSku');
-  const submit = form?.querySelector('button[type="submit"]');
-  const selectedCategory = equipmentCategories.find(category => category.id === categorySelect?.value);
   if(!selectedCategory || !skuInput) return;
 
   const categoryPrefixes = {
@@ -1349,58 +1360,54 @@ async function updateGeneratedEquipmentSku(){
     .join('')
     .slice(0, 2)
     .toUpperCase();
-
-  const requestId = ++skuGenerationRequest;
-  skuInput.value = '';
-  if(submit) submit.disabled = true;
-
-  const { data, error } = await supabaseClient
-    .from('equipment')
-    .select('sku')
-    .like('sku', `${prefix}-%`);
-
-  if(requestId !== skuGenerationRequest || categorySelect?.value !== selectedCategory.id) return;
-
-  if(error){
-    console.error('Could not load existing SKUs:', error);
-    if(submit) submit.disabled = false;
-    showNotice('Could not generate an equipment SKU. Please change the category and try again.', 'error');
-    return;
-  }
-
-  const skuPattern = new RegExp(`^${prefix}-(\\d+)$`);
-  const highestNumber = (data || []).reduce((highest, item) => {
-    const match = item.sku.match(skuPattern);
-    return match ? Math.max(highest, Number(match[1])) : highest;
+  const highestNumber = inventory.reduce((highest, item) => {
+    if(!item.sku.startsWith(`${prefix}-`)) return highest;
+    const number = Number(item.sku.slice(prefix.length + 1));
+    return Number.isInteger(number) ? Math.max(highest, number) : highest;
   }, 0);
 
   skuInput.value = `${prefix}-${String(highestNumber + 1).padStart(4, '0')}`;
-  if(submit) submit.disabled = false;
 }
 
 async function removeEquipmentFromInventory(){
   if(currentProfile?.role !== 'admin' || !currentEditEquipmentId) return;
   const item = inventory.find(equipment => equipment.id === currentEditEquipmentId);
   if(!item) return;
-  if(!window.confirm(`Permanently delete ${item.name}? This cannot be undone and will also delete its borrow and checkout history.`)) return;
+  if(!window.confirm(`Remove ${item.name} from active inventory? Checkout history will be kept.`)) return;
 
   const removeButton = document.getElementById('deleteEquipmentBtn');
-  const restoreButton = setButtonProcessing(removeButton, 'DELETING...');
+  const restoreButton = setButtonProcessing(removeButton, 'REMOVING...');
+  const { data: activeCheckouts, error: checkoutError } = await supabaseClient
+    .from('checkouts')
+    .select('qty')
+    .eq('equipment_id', currentEditEquipmentId)
+    .eq('status', 'checked_out');
 
-  const { error } = await supabaseClient.rpc('delete_equipment_permanently', {
-    equipment_uuid: currentEditEquipmentId
-  });
+  if(checkoutError){
+    console.error(checkoutError);
+    restoreButton();
+    showNotice('Equipment could not be removed. Checkout history could not be checked.', 'error');
+    return;
+  }
+
+  const outstandingQty = (activeCheckouts || []).reduce((total, checkout) => total + Number(checkout.qty || 0), 0);
+  const { error } = await supabaseClient.from('equipment').update({
+    available_qty: 0,
+    maintenance_qty: 0,
+    total_qty: outstandingQty,
+    status: 'deactivated'
+  }).eq('id', currentEditEquipmentId);
 
   if(error){
     console.error(error);
     restoreButton();
-    showNotice(error.message || 'Equipment could not be deleted. No changes were saved.', 'error');
+    showNotice('Equipment could not be removed. No changes were saved.', 'error');
     return;
   }
 
   closeEquipmentModal();
   await loadAllData();
-  showNotice('Equipment deleted permanently.', 'success');
+  showNotice('Equipment removed from active inventory. Checkout history was preserved.', 'success');
 }
 
 async function toggleEquipmentActivation(){
@@ -1432,12 +1439,6 @@ async function toggleEquipmentActivation(){
 }
 
 document.addEventListener('click', e => {
-  const addEquipmentTrigger = e.target.closest('#addEquipmentBtn');
-  if(addEquipmentTrigger){
-    openAddEquipmentModal();
-    return;
-  }
-
   const editTrigger = e.target.closest('[data-action="edit-equipment"]');
   if(editTrigger){
     openEquipmentModal(editTrigger.dataset.id);
@@ -1536,11 +1537,8 @@ function openReturnModal(checkoutId){
   document.getElementById('returnEquipmentName').value = checkout.name;
   document.getElementById('returnReference').value = checkout.ref;
   document.getElementById('returnCheckedOutQuantity').value = checkout.qty;
+  document.getElementById('returnQuantity').value = checkout.qty;
   document.getElementById('returnQuantity').max = checkout.qty;
-  document.getElementById('returnUnitChoices').innerHTML = checkout.outstandingUnitNumbers.map(number =>
-    `<label class="return-unit-choice"><input type="checkbox" value="${number}"><span class="mono">${unitTag(checkout.sku, number)}</span></label>`
-  ).join('') || '<span class="dim">Unit numbers are unavailable for this older checkout. Ask an administrator to review it.</span>';
-  document.getElementById('returnQuantity').value = '0';
   document.getElementById('returnReceivedBy').value = checkout.athlete;
   document.getElementById('returnCheckedOutAt').value = checkout.out;
   document.getElementById('returnDueDate').value = checkout.due;
@@ -1567,11 +1565,8 @@ document.getElementById('returnForm').addEventListener('submit', async event => 
   if(!currentReturnCheckout) return;
 
   const quantity = Number(document.getElementById('returnQuantity').value);
-  const unitNumbers = Array.from(document.querySelectorAll('#returnUnitChoices input:checked'))
-    .map(input => Number(input.value));
-  if(!Number.isInteger(quantity) || quantity < 1 || quantity > currentReturnCheckout.qty
-    || unitNumbers.length !== quantity){
-    showNotice('Select the exact unit number(s) you are returning.', 'error');
+  if(!Number.isInteger(quantity) || quantity < 1 || quantity > currentReturnCheckout.qty){
+    showNotice(`Return quantity must be between 1 and ${currentReturnCheckout.qty}.`, 'error');
     return;
   }
 
@@ -1579,8 +1574,7 @@ document.getElementById('returnForm').addEventListener('submit', async event => 
   const restoreButton = setButtonProcessing(submit, 'PROCESSING...');
   const { error } = await supabaseClient.rpc('request_equipment_return', {
     checkout_uuid: currentReturnCheckout.id,
-    quantity_requested: quantity,
-    unit_numbers_requested: unitNumbers
+    quantity_requested: quantity
   });
 
   if(error){
@@ -1607,8 +1601,6 @@ function openAdminReturnModal(returnRequestId){
   document.getElementById('adminReturnBorrower').value = request.borrower;
   document.getElementById('adminReturnQuantity').value = request.quantity;
   document.getElementById('adminReturnCheckoutQuantity').value = request.checkoutQuantity;
-  document.getElementById('adminReturnUnitNumbers').value = request.unitNumbers
-    .map(number=>unitTag(request.ref, number)).join(', ') || '—';
   document.getElementById('adminReturnCheckedOutAt').value = request.checkedOutAt.slice(0,10);
   document.getElementById('adminReturnDueDate').value = request.dueDate;
   document.getElementById('adminReturnRequestedAt').value = request.requestedAt.slice(0,10);
@@ -1730,11 +1722,6 @@ function closeFinishMaintenanceModal(){
 document.getElementById('finishMaintenanceReady').addEventListener('input', updateFinishMaintenanceValidation);
 document.getElementById('finishMaintenanceNeeds').addEventListener('input', updateFinishMaintenanceValidation);
 
-document.getElementById('returnUnitChoices').addEventListener('change', () => {
-  const selectedCount = document.querySelectorAll('#returnUnitChoices input:checked').length;
-  document.getElementById('returnQuantity').value = String(selectedCount);
-});
-
 document.getElementById('finishMaintenanceForm').addEventListener('submit', async event => {
   event.preventDefault();
   if(!currentFinishMaintenance || !updateFinishMaintenanceValidation()) return;
@@ -1828,6 +1815,7 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
   showNotice(isAdmin ? 'Checkout created successfully.' : 'Borrow request submitted for admin approval.', 'success');
 });
 
+document.getElementById('addEquipmentBtn')?.addEventListener('click', openAddEquipmentModal);
 document.getElementById('addPurchaseOrderBtn')?.addEventListener('click', openPurchaseOrderModal);
 document.getElementById('closePurchaseOrderModal')?.addEventListener('click', closePurchaseOrderModal);
 document.getElementById('cancelPurchaseOrderModal')?.addEventListener('click', closePurchaseOrderModal);
@@ -1887,20 +1875,15 @@ document.getElementById('addEquipmentForm')?.addEventListener('submit', async ev
   const totalQty = Number(form.total.value);
   const availableQty = Number(form.available.value);
   const submit = form.querySelector('button[type="submit"]');
-  const sku = form.elements.namedItem('sku').value.trim();
 
-  if(!sku){
-    showNotice('Equipment SKU is still being generated. Please wait and try again.', 'warning');
-    return;
-  }
-  if(!Number.isInteger(totalQty) || totalQty < 0 || !Number.isInteger(availableQty) || availableQty < 0 || availableQty > totalQty){
+  if(!Number.isInteger(totalQty) || totalQty < 1 || !Number.isInteger(availableQty) || availableQty < 0 || availableQty > totalQty){
     showNotice('Available stock must be a whole number between zero and total stock.', 'error');
     return;
   }
 
   const restoreSubmit = setButtonProcessing(submit, 'ADDING...');
   const { error } = await supabaseClient.from('equipment').insert({
-    sku,
+    sku: form.sku.value.trim(),
     name: form.elements.namedItem('name').value.trim(),
     category_id: form.category.value,
     event: form.event.value.trim(),
