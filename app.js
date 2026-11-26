@@ -476,6 +476,7 @@ async function loadCheckouts(){
       id: c.id,
       ref: `C${String(idx+1).padStart(3,'0')}`,
       name: c.equipment?.name || 'Unknown item',
+      sku: c.equipment?.sku || '',
       athlete: c.user_name,
       team: c.user_team || '',
       recipient,
@@ -1025,6 +1026,7 @@ function renderCheckouts(){
         <tr class="${c.returned?'done-row':''}">
           <td class="mono">${c.ref}</td>
           <td class="strong">${c.name}</td>
+          <td class="mono sku-cell">${c.sku || '—'}</td>
           <td>${c.athlete}</td>
           <td class="dim">${c.recipient || c.organizationName || c.team || '-'}</td>
           <td class="dim">${c.purpose || '-'}</td>
