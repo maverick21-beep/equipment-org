@@ -1409,6 +1409,12 @@ async function toggleEquipmentActivation(){
 }
 
 document.addEventListener('click', e => {
+  const addEquipmentTrigger = e.target.closest('#addEquipmentBtn');
+  if(addEquipmentTrigger){
+    openAddEquipmentModal();
+    return;
+  }
+
   const editTrigger = e.target.closest('[data-action="edit-equipment"]');
   if(editTrigger){
     openEquipmentModal(editTrigger.dataset.id);
@@ -1799,7 +1805,6 @@ document.getElementById('borrowForm').addEventListener('submit', async (event) =
   showNotice(isAdmin ? 'Checkout created successfully.' : 'Borrow request submitted for admin approval.', 'success');
 });
 
-document.getElementById('addEquipmentBtn')?.addEventListener('click', openAddEquipmentModal);
 document.getElementById('addPurchaseOrderBtn')?.addEventListener('click', openPurchaseOrderModal);
 document.getElementById('closePurchaseOrderModal')?.addEventListener('click', closePurchaseOrderModal);
 document.getElementById('cancelPurchaseOrderModal')?.addEventListener('click', closePurchaseOrderModal);
