@@ -445,6 +445,7 @@ async function loadInventory(){
 function mapEquipStatus(status, have, total){
   if(status === 'maintenance') return 'Maintenance';
   if(status === 'deactivated') return 'Deactivated';
+  if(total === 0) return 'Unavailable';
   if(have <= 0 && total > 0) return 'Checked Out';
   return 'Available';
 }
@@ -452,7 +453,7 @@ function mapEquipStatus(status, have, total){
 async function loadCheckouts(){
   let { data, error } = await supabaseClient
     .from('checkouts')
-    .select('*, equipment:equipment(name, sku), request_item:borrow_request_items!request_item_id(borrow_date, expected_return_date, request:borrow_requests(purpose, organization_name, status)), returnRequests:return_requests(id, status, quantity, requested_at, rejection_reason)')
+    .select('*, equipment:equipment(name, sku), request_item:borrow_request_items!request_item_id(borrow_date, expected_return_date, request:borrow_requests(purpose, organization_name, status)), returnRequests:return_requests(id, status, quantity, unit_numbers, requested_at, rejection_reason)')
     .order('checked_out_at', { ascending: false });
 
   if(error){
@@ -478,6 +479,11 @@ async function loadCheckouts(){
       name: c.equipment?.name || 'Unknown item',
       sku: c.equipment?.sku || '',
       unitNumbers: c.unit_numbers || [],
+      returnedUnitNumbers: c.status === 'returned'
+        ? c.unit_numbers || []
+        : checkoutReturnRequests
+          .filter(request => request.status === 'approved')
+          .flatMap(request => request.unit_numbers || []),
       athlete: c.user_name,
       team: c.user_team || '',
       recipient,
@@ -495,6 +501,9 @@ async function loadCheckouts(){
       returnReason: returnRequest?.rejection_reason || ''
     };
   });
+  checkouts.forEach(checkout => {
+    checkout.outstandingUnitNumbers = checkout.unitNumbers.filter(number => !checkout.returnedUnitNumbers.includes(number));
+  });
   checkoutCount = checkouts.length;
 }
 
@@ -506,7 +515,7 @@ async function loadReturnRequests(){
 
   const { data, error } = await supabaseClient
     .from('return_requests')
-    .select(`*, checkout:checkouts(id, equipment_id, user_id, user_name, qty, checked_out_at, due_date, status, equipment:equipment(name, sku)), profile:profiles!return_requests_user_id_fkey(full_name, email)`)
+    .select(`*, checkout:checkouts(id, equipment_id, user_id, user_name, qty, unit_numbers, checked_out_at, due_date, status, equipment:equipment(name, sku)), profile:profiles!return_requests_user_id_fkey(full_name, email)`)
     .eq('status', 'pending')
     .order('requested_at', { ascending: false });
 
@@ -524,7 +533,9 @@ async function loadReturnRequests(){
     equipmentName: request.checkout?.equipment?.name || 'Unknown item',
     ref: request.checkout?.equipment?.sku || '—',
     quantity: request.quantity,
+    unitNumbers: request.unit_numbers || [],
     checkoutQuantity: request.checkout?.qty || 0,
+    checkoutUnitNumbers: request.checkout?.unit_numbers || [],
     checkedOutAt: request.checkout?.checked_out_at || '',
     dueDate: request.checkout?.due_date || '—',
     requestedAt: request.requested_at,
@@ -694,7 +705,7 @@ if(tabsEl){
 function condClass(c){ return c.toLowerCase(); }
 function statusClass(s){ return s.toLowerCase().replace(' ',''); }
 function unitTag(sku, number){
-  return `${sku}-${String(number).padStart(2, '0')}`;
+  return `${sku}-${number}`;
 }
 function formatUnitTags(sku, numbers){
   if(!numbers || !numbers.length) return '';
@@ -854,8 +865,7 @@ function renderBorrowRequests(){
 
     return `
       <tr>
-        <td><div class="strong">${req.borrower}</div><div class="mono dim">${req.email || req.organizationName}</div></td>
-        <td>${req.organizationName}</td>
+        <td><div class="strong">${req.borrower}</div>${req.email ? `<div class="mono dim">${req.email}</div>` : ''}</td>
         <td>${itemText}</td>
         <td>${req.items.reduce((sum, item) => sum + Number(item.qty || 0), 0)}</td>
         <td class="mono dim">${firstItem.borrowDate || '—'}</td>
@@ -864,7 +874,7 @@ function renderBorrowRequests(){
         <td><span class="pill ${requestStatusClass}">${req.status}</span></td>
         <td>${actions}</td>
       </tr>`;
-  }).join('') : '<tr><td colspan="9" class="dim">No matching requests found.</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="dim">No matching requests found.</td></tr>';
 
   pendingRequestsSection.style.display = ['all', 'pending'].includes(checkoutFilter) ? '' : 'none';
   pendingRequestsBody.innerHTML = renderRequestRows(pendingRequests);
@@ -907,6 +917,7 @@ function renderReturnRequests(){
       <td class="strong">${request.equipmentName}</td>
       <td>${request.borrower}</td>
       <td class="strong">${request.quantity}</td>
+      <td class="mono sku-cell">${request.unitNumbers.map(number=>unitTag(request.ref, number)).join(', ') || '—'}</td>
       <td class="mono dim">${(request.checkedOutAt || '').slice(0,10)}</td>
       <td class="mono dim">${request.dueDate}</td>
       <td class="mono dim">${(request.requestedAt || '').slice(0,10)}</td>
@@ -1022,9 +1033,8 @@ function renderCheckouts(){
         <tr class="${c.returned?'done-row':''}">
           <td class="mono">${c.ref}</td>
           <td class="strong">${c.name}</td>
-          <td class="mono sku-cell">${c.unitNumbers?.length ? c.unitNumbers.map(n=>unitTag(c.sku, n)).join(', ') : (c.sku || '—')}</td>
+          <td class="mono sku-cell">${c.unitNumbers?.length ? c.unitNumbers.map(n=>unitTag(c.sku, n)).join(', ') : (c.sku || '—')}${c.returnedUnitNumbers?.length ? `<span class="unit-tags">Returned: ${c.returnedUnitNumbers.map(n=>unitTag(c.sku, n)).join(', ')}</span>` : ''}</td>
           <td>${c.athlete}</td>
-          <td class="dim">${c.recipient || c.organizationName || c.team || '-'}</td>
           <td class="dim">${c.purpose || '-'}</td>
           <td class="mono dim">${c.out}</td>
           <td class="mono ${c.overdue && !c.returned?'due-warn':'dim'}">${c.overdue && !c.returned?'⚠ ':''}${c.due}</td>
@@ -1497,8 +1507,11 @@ function openReturnModal(checkoutId){
   document.getElementById('returnEquipmentName').value = checkout.name;
   document.getElementById('returnReference').value = checkout.ref;
   document.getElementById('returnCheckedOutQuantity').value = checkout.qty;
-  document.getElementById('returnQuantity').value = checkout.qty;
   document.getElementById('returnQuantity').max = checkout.qty;
+  document.getElementById('returnUnitChoices').innerHTML = checkout.outstandingUnitNumbers.map(number =>
+    `<label class="return-unit-choice"><input type="checkbox" value="${number}"><span class="mono">${unitTag(checkout.sku, number)}</span></label>`
+  ).join('') || '<span class="dim">Unit numbers are unavailable for this older checkout. Ask an administrator to review it.</span>';
+  document.getElementById('returnQuantity').value = '0';
   document.getElementById('returnReceivedBy').value = checkout.athlete;
   document.getElementById('returnCheckedOutAt').value = checkout.out;
   document.getElementById('returnDueDate').value = checkout.due;
@@ -1525,8 +1538,11 @@ document.getElementById('returnForm').addEventListener('submit', async event => 
   if(!currentReturnCheckout) return;
 
   const quantity = Number(document.getElementById('returnQuantity').value);
-  if(!Number.isInteger(quantity) || quantity < 1 || quantity > currentReturnCheckout.qty){
-    showNotice(`Return quantity must be between 1 and ${currentReturnCheckout.qty}.`, 'error');
+  const unitNumbers = Array.from(document.querySelectorAll('#returnUnitChoices input:checked'))
+    .map(input => Number(input.value));
+  if(!Number.isInteger(quantity) || quantity < 1 || quantity > currentReturnCheckout.qty
+    || unitNumbers.length !== quantity){
+    showNotice('Select the exact unit number(s) you are returning.', 'error');
     return;
   }
 
@@ -1534,7 +1550,8 @@ document.getElementById('returnForm').addEventListener('submit', async event => 
   const restoreButton = setButtonProcessing(submit, 'PROCESSING...');
   const { error } = await supabaseClient.rpc('request_equipment_return', {
     checkout_uuid: currentReturnCheckout.id,
-    quantity_requested: quantity
+    quantity_requested: quantity,
+    unit_numbers_requested: unitNumbers
   });
 
   if(error){
@@ -1561,6 +1578,8 @@ function openAdminReturnModal(returnRequestId){
   document.getElementById('adminReturnBorrower').value = request.borrower;
   document.getElementById('adminReturnQuantity').value = request.quantity;
   document.getElementById('adminReturnCheckoutQuantity').value = request.checkoutQuantity;
+  document.getElementById('adminReturnUnitNumbers').value = request.unitNumbers
+    .map(number=>unitTag(request.ref, number)).join(', ') || '—';
   document.getElementById('adminReturnCheckedOutAt').value = request.checkedOutAt.slice(0,10);
   document.getElementById('adminReturnDueDate').value = request.dueDate;
   document.getElementById('adminReturnRequestedAt').value = request.requestedAt.slice(0,10);
@@ -1681,6 +1700,11 @@ function closeFinishMaintenanceModal(){
 
 document.getElementById('finishMaintenanceReady').addEventListener('input', updateFinishMaintenanceValidation);
 document.getElementById('finishMaintenanceNeeds').addEventListener('input', updateFinishMaintenanceValidation);
+
+document.getElementById('returnUnitChoices').addEventListener('change', () => {
+  const selectedCount = document.querySelectorAll('#returnUnitChoices input:checked').length;
+  document.getElementById('returnQuantity').value = String(selectedCount);
+});
 
 document.getElementById('finishMaintenanceForm').addEventListener('submit', async event => {
   event.preventDefault();
@@ -1836,7 +1860,7 @@ document.getElementById('addEquipmentForm')?.addEventListener('submit', async ev
   const availableQty = Number(form.available.value);
   const submit = form.querySelector('button[type="submit"]');
 
-  if(!Number.isInteger(totalQty) || totalQty < 1 || !Number.isInteger(availableQty) || availableQty < 0 || availableQty > totalQty){
+  if(!Number.isInteger(totalQty) || totalQty < 0 || !Number.isInteger(availableQty) || availableQty < 0 || availableQty > totalQty){
     showNotice('Available stock must be a whole number between zero and total stock.', 'error');
     return;
   }
